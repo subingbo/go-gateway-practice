@@ -17,7 +17,9 @@ func main() {
 	) {
 		id := r.PathValue("id")
 
-		w.Write([]byte("Order OK\n"))
+		// w.Write([]byte("Order OK\n"))
+
+		fmt.Fprintf(w, "Order Service OK\n")
 
 		fmt.Fprintf(w, "Service: Order\n")
 		fmt.Fprintf(w, "Order ID: %s\n", id)

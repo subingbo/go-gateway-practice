@@ -39,3 +39,33 @@ func loggingMiddleware(next http.Handler) http.Handler {
         )
     })
 }
+
+// 认证中间件
+func authMiddleware(next http.Handler) http.Handler {
+
+    return http.HandlerFunc(func(
+        w http.ResponseWriter,
+        r *http.Request,
+    ) {
+
+        // 从 HTTP 请求头中获取 Authorization
+        token := r.Header.Get("Authorization")
+
+        // 验证 Token
+        if token != "Bearer dev-token" {
+
+            // 返回 401 Unauthorized
+            http.Error(
+                w,
+                "Unauthorized",
+                http.StatusUnauthorized,
+            )
+
+            return
+        }
+
+        // 认证通过，交给下一个 Handler
+        next.ServeHTTP(w, r)
+    })
+}
+

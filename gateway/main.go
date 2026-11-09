@@ -63,10 +63,21 @@ func main() {
 	}
 
 	// 5. 创建 Gateway 路由器
+	// mux := http.NewServeMux()
+
+	// mux.Handle("/api/users/", userProxy)
+	// mux.Handle("/api/orders/", orderProxy)
+
+	apiMux := http.NewServeMux()
+
+	apiMux.Handle("/api/users/", userProxy)
+	apiMux.Handle("/api/orders/", orderProxy)
+
+	// 2. 创建 Gateway 主路由器
 	mux := http.NewServeMux()
 
-	mux.Handle("/api/users/", userProxy)
-	mux.Handle("/api/orders/", orderProxy)
+	// 3. API 路由统一经过认证中间件
+	mux.Handle("/api/", authMiddleware(apiMux))
 
 	// 6. 健康检查接口
 	mux.HandleFunc("GET /health", func(
