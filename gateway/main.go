@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/base64"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
+	"fmt"
 )
 
 // 创建反向代理
@@ -73,11 +76,38 @@ func main() {
 	apiMux.Handle("/api/users/", userProxy)
 	apiMux.Handle("/api/orders/", orderProxy)
 
+	apiMux.HandleFunc("GET /api/whoami", func(
+    w http.ResponseWriter,
+    r *http.Request,
+) {
+    userID, ok := r.Context().Value(
+        userIDContextKey{},
+    ).(string)
+
+    if !ok {
+        http.Error(w, "Missing user identity", 500)
+        return
+    }
+
+    fmt.Fprintf(w, "Current User ID: %s\n", userID)
+})
+
 	// 2. 创建 Gateway 主路由器
 	mux := http.NewServeMux()
 
 	// 3. API 路由统一经过认证中间件
-	mux.Handle("/api/", authMiddleware(apiMux))
+
+	// 从环境变量读取 Base64 编码的密钥
+	secretText := os.Getenv("JWT_SECRET")
+
+	// 解码成原始字节
+	jwtSecret, err := base64.StdEncoding.DecodeString(secretText)
+	if err != nil || len(jwtSecret) < 32 {
+		log.Fatal("JWT_SECRET must encode at least 32 random bytes")
+	}
+
+	// 注册 API 认证中间件
+	mux.Handle("/api/", authMiddleware(apiMux, jwtSecret))
 
 	// 6. 健康检查接口
 	mux.HandleFunc("GET /health", func(
