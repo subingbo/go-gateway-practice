@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 )
 
 func main() {
@@ -11,20 +12,31 @@ func main() {
 	mux := http.NewServeMux()
 
 	// 注册查询订单接口
-	mux.HandleFunc("GET /orders/{id}", func(
+
+	mux.HandleFunc("GET /orders/slow", func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
-		id := r.PathValue("id")
 
-		// w.Write([]byte("Order OK\n"))
+		log.Println("Slow order request started")
 
-		fmt.Fprintf(w, "Order Service OK\n")
+		// 模拟一个需要 5 秒的业务任务
+		select {
 
-		fmt.Fprintf(w, "Service: Order\n")
-		fmt.Fprintf(w, "Order ID: %s\n", id)
-		fmt.Fprintf(w, "Method: %s\n", r.Method)
-		fmt.Fprintf(w, "Path: %s\n", r.URL.Path)
+		case <-time.After(5 * time.Second):
+
+			fmt.Fprintln(w, "Slow order completed")
+
+		case <-r.Context().Done():
+
+			// 客户端或 Gateway 取消了请求
+			log.Printf(
+				"Slow order canceled: %v",
+				r.Context().Err(),
+			)
+
+			return
+		}
 	})
 
 	// 启动订单服务

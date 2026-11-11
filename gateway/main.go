@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -9,7 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
-	"fmt"
+	"errors"
+	"context"
 )
 
 // 创建反向代理
@@ -22,23 +24,51 @@ func newReverseProxy(target string, prefix string) (*httputil.ReverseProxy, erro
 	}
 
 	// 2. 创建 ReverseProxy
+
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 
-			// 修改目标服务器地址
 			pr.SetURL(targetURL)
 
-			// 删除外部 API 路径前缀
 			pr.Out.URL.Path = strings.TrimPrefix(
 				pr.Out.URL.Path,
 				prefix,
 			)
 
-			// 清除可能不再匹配的原始编码路径
 			pr.Out.URL.RawPath = ""
 
-			// 设置代理请求头
 			pr.SetXForwarded()
+		},
+
+		// 自定义代理错误处理
+		ErrorHandler: func(
+			w http.ResponseWriter,
+			r *http.Request,
+			err error,
+		) {
+
+			// 判断是否因为超时而失败
+			if errors.Is(err, context.DeadlineExceeded) ||
+				errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+
+				log.Printf("Backend request timeout: %v", err)
+
+				http.Error(
+					w,
+					"Gateway Timeout",
+					http.StatusGatewayTimeout,
+				)
+				return
+			}
+
+			// 其他代理错误
+			log.Printf("Reverse proxy error: %v", err)
+
+			http.Error(
+				w,
+				"Bad Gateway",
+				http.StatusBadGateway,
+			)
 		},
 	}
 
@@ -77,20 +107,20 @@ func main() {
 	apiMux.Handle("/api/orders/", orderProxy)
 
 	apiMux.HandleFunc("GET /api/whoami", func(
-    w http.ResponseWriter,
-    r *http.Request,
-) {
-    userID, ok := r.Context().Value(
-        userIDContextKey{},
-    ).(string)
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		userID, ok := r.Context().Value(
+			userIDContextKey{},
+		).(string)
 
-    if !ok {
-        http.Error(w, "Missing user identity", 500)
-        return
-    }
+		if !ok {
+			http.Error(w, "Missing user identity", 500)
+			return
+		}
 
-    fmt.Fprintf(w, "Current User ID: %s\n", userID)
-})
+		fmt.Fprintf(w, "Current User ID: %s\n", userID)
+	})
 
 	// 2. 创建 Gateway 主路由器
 	mux := http.NewServeMux()
@@ -107,8 +137,14 @@ func main() {
 	}
 
 	// 注册 API 认证中间件
-	mux.Handle("/api/", authMiddleware(apiMux, jwtSecret))
+	// API 路由先经过超时控制
+	apiHandler := timeoutMiddleware(
+		apiMux,
+		2*time.Second,
+	)
 
+	// 再经过 JWT 认证
+	mux.Handle("/api/", authMiddleware(apiHandler, jwtSecret))
 	// 6. 健康检查接口
 	mux.HandleFunc("GET /health", func(
 		w http.ResponseWriter,

@@ -63,7 +63,7 @@ func authMiddleware(
 			return
 		}
 
-		// 3. 提取 JWT 字符串
+		// 3. 提取 JWT
 		tokenString := strings.TrimPrefix(
 			authorization,
 			"Bearer ",
@@ -76,10 +76,10 @@ func authMiddleware(
 			return
 		}
 
-		// 5. 验证通过，记录用户 ID
+		// 5. 获取用户 ID
 		log.Printf("Authenticated user: %s", claims.UserID)
 
-		// 6. 创建携带用户 ID 的 Context
+		// 6. 将用户 ID 保存到 Context
 		ctx := context.WithValue(
 			r.Context(),
 			userIDContextKey{},
@@ -89,10 +89,35 @@ func authMiddleware(
 		// 7. 将新 Context 绑定到 Request
 		newRequest := r.WithContext(ctx)
 
-		// 8. 继续调用下一个 Handler
+		// 8. 只调用一次下游 Handler
 		next.ServeHTTP(w, newRequest)
+	})
+}
 
-		// 6. 继续交给下一个 Handler
-		next.ServeHTTP(w, r)
+// 超时中间件
+func timeoutMiddleware(
+	next http.Handler,
+	timeout time.Duration,
+) http.Handler {
+
+	return http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+
+		// 创建具有超时时间的 Context
+		ctx, cancel := context.WithTimeout(
+			r.Context(),
+			timeout,
+		)
+
+		// 请求结束时释放资源
+		defer cancel()
+
+		// 创建携带超时 Context 的新 Request
+		newRequest := r.WithContext(ctx)
+
+		// 继续执行下一个 Handler
+		next.ServeHTTP(w, newRequest)
 	})
 }
