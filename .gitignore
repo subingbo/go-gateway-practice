@@ -10,5 +10,10 @@
 .env.*
 !.env.example
 
+# Frontend
+gateway/web/node_modules/
+gateway/web/dist/*
+!gateway/web/dist/.gitkeep
+
 # IDE
 .idea/

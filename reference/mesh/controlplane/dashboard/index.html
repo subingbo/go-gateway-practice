@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mesh Control Plane</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel-2: #1d212a;
+      --line: #2a303c;
+      --text: #e6e9ef;
+      --muted: #8b93a3;
+      --accent: #7cc4ff;
+      --good: #4ade80;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(15, 17, 21, .9);
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(8px);
+      z-index: 2;
+    }
+    h1 { margin: 0; font-size: 18px; letter-spacing: .2px; }
+    h1 span { color: var(--accent); }
+    h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); font-weight: 600; letter-spacing: .4px; text-transform: uppercase; }
+    main { padding: 20px 24px 48px; display: grid; gap: 20px; }
+    .status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 10px currentColor; }
+    .dot.online { background: var(--good); }
+    .dot.offline { background: var(--bad); }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+    .card .label { color: var(--muted); font-size: 12px; }
+    .card .value { font-size: 22px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .card .hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow: hidden; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    tr:last-child td { border-bottom: none; }
+    code, .mono { font-family: var(--mono); font-size: 12px; }
+    .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid transparent; }
+    .badge.HEALTHY { color: #052e16; background: var(--good); }
+    .badge.UNHEALTHY { color: #450a0a; background: var(--bad); }
+    .badge.UNKNOWN { color: #422006; background: var(--warn); }
+    .muted { color: var(--muted); }
+    .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; font-size: 13px; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; }
+    .rule { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; background: var(--panel-2); }
+    .rule:last-child { margin-bottom: 0; }
+    .rule-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .rule-head strong { font-size: 13px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag { border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+    .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+    .error { color: var(--bad); font-size: 13px; margin-top: 8px; white-space: pre-wrap; }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      main { padding: 16px; }
+      header { padding: 14px 16px; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Mesh <span>Control Plane</span></h1>
+  <div class="status"><span id="dot" class="dot"></span><span id="statusText">连接中…</span></div>
+</header>
+<main>
+  <section class="cards" id="cards"></section>
+
+  <section>
+    <h2>服务与实例</h2>
+    <table>
+      <thead><tr><th>Service</th><th>Instance</th><th>Address</th><th>Labels</th><th>Status</th><th>Last seen</th></tr></thead>
+      <tbody id="services"></tbody>
+    </table>
+  </section>
+
+  <div class="grid">
+    <section>
+      <h2>VirtualService</h2>
+      <div id="vs"></div>
+    </section>
+    <section>
+      <h2>DestinationRule</h2>
+      <div id="dr"></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Sidecar 舰队</h2>
+    <table>
+      <thead><tr><th>Identity</th><th>Service</th><th>Inbound</th><th>Config</th><th>Cert expires</th><th>Last seen</th></tr></thead>
+      <tbody id="sidecars"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>证书颁发机构</h2>
+    <div id="ca"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children.flat()) {
+    if (child == null) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+function fmtTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function fmtDateTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function fmtDuration(seconds) {
+  if (!Number.isFinite(seconds)) return "—";
+  if (seconds < 60) return Math.round(seconds) + "s";
+  if (seconds < 3600) return Math.floor(seconds / 60) + "m " + Math.round(seconds % 60) + "s";
+  return Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m";
+}
+
+function badge(status) {
+  return el("span", { class: "badge " + status, text: status });
+}
+
+function card(label, value, hint) {
+  return el("div", { class: "card" },
+    el("div", { class: "label", text: label }),
+    el("div", { class: "value", text: value }),
+    hint ? el("div", { class: "hint", text: hint }) : null,
+  );
+}
+
+function renderCards(data) {
+  const services = data.services || [];
+  let total = 0, healthy = 0;
+  for (const svc of services) {
+    for (const inst of svc.instances || []) {
+      total++;
+      if (inst.status === "HEALTHY") healthy++;
+    }
+  }
+
+  $("cards").replaceChildren(
+    card("配置版本", data.version ?? 0, "snapshot"),
+    card("服务", services.length, "registered services"),
+    card("实例", healthy + " / " + total, "healthy / total"),
+    card("Sidecar", (data.sidecars || []).length, "reporting"),
+    card("Watch 客户端", data.watch_clients ?? 0, "SSE"),
+    card("累计签发证书", data.ca_issued_total ?? 0, "CA"),
+    card("运行时长", fmtDuration(data.uptime_seconds), "control plane"),
+  );
+}
+
+function renderServices(data) {
+  const body = $("services");
+  body.replaceChildren();
+
+  const services = data.services || [];
+  if (!services.length) {
+    body.append(el("tr", {}, el("td", { colspan: 6, class: "empty", text: "还没有实例注册" })));
+    return;
+  }
+
+  for (const svc of services) {
+    for (const inst of svc.instances || []) {
+      const labels = Object.entries(inst.labels || {}).map(([k, v]) => k + "=" + v).join(", ");
+      body.append(el("tr", {},
+        el("td", { text: svc.name }),
+        el("td", { class: "mono", text: inst.id }),
+        el("td", { class: "mono", text: inst.address }),
+        el("td", { class: "mono muted", text: labels || "—" }),
+        el("td", {}, badge(inst.status || "UNKNOWN")),
+        el("td", { class: "muted", text: fmtTime(inst.last_seen) }),
+      ));
+    }
+  }
+}
+
+function renderVirtualServices(data) {
+  const root = $("vs");
+  root.replaceChildren();
+
+  const items = data.virtual_services || [];
+  if (!items.length) {
+    root.append(el("div", { class: "empty", text: "没有 VirtualService" }));
+    return;
+  }
+
+  for (const vs of items) {
+    const block = el("div", { class: "rule" });
+    block.append(el("div", { class: "rule-head" },
+      el("strong", { text: vs.metadata?.name || "unnamed" }),
+      el("span", { class: "muted mono", text: (vs.spec?.hosts || []).join(", ") }),
+    ));
+
+    for (const route of vs.spec?.http || []) {
+      const summary = el("div", { class: "tags" });
+
+      for (const match of route.match || []) {
+        const parts = [];
+        if (match.path_prefix) parts.push("path:" + match.path_prefix);
+        if (match.method) parts.push("method:" + match.method);
+        for (const [k, v] of Object.entries(match.headers || {})) parts.push(k + "=" + v);
+        if (!parts.length) parts.push("match:all");
+        summary.append(el("span", { class: "tag", text: parts.join(" ") }));
+      }
+
+      for (const dest of route.route || []) {
+        summary.append(el("span", { class: "tag", text: (dest.destination?.subset || "default") + " " + (dest.weight ?? 1) + "%" }));
+      }
+
+      if (route.timeout) summary.append(el("span", { class: "tag", text: "timeout:" + route.timeout }));
+      if (route.retries) summary.append(el("span", { class: "tag", text: "retries:" + route.retries.attempts }));
+      if (route.fault?.abort) summary.append(el("span", { class: "tag", text: "abort:" + route.fault.abort.http_status }));
+      if (route.fault?.delay) summary.append(el("span", { class: "tag", text: "delay:" + route.fault.delay.fixed_delay }));
+
+      block.append(el("div", { style: "margin:6px 0 2px" },
+        el("span", { class: "muted mono", text: route.name || "rule" }),
+      ));
+      block.append(summary);
+    }
+
+    root.append(block);
+  }
+}
+
+function renderDestinationRules(data) {
+  const root = $("dr");
+  root.replaceChildren();
+
+  const items = data.destination_rules || [];
+  if (!items.length) {
+    root.append(el("div", { class: "empty", text: "没有 DestinationRule" }));
+    return;
+  }
+
+  for (const dr of items) {
+    const policy = dr.spec?.traffic_policy || {};
+    const block = el("div", { class: "rule" });
+    block.append(el("div", { class: "rule-head" },
+      el("strong", { text: dr.metadata?.name || dr.spec?.host || "unnamed" }),
+      el("span", { class: "muted mono", text: dr.spec?.host || "" }),
+    ));
+
+    const tags = el("div", { class: "tags" });
+    for (const subset of dr.spec?.subsets || []) {
+      const labels = Object.entries(subset.labels || {}).map(([k, v]) => k + "=" + v).join(",");
+      tags.append(el("span", { class: "tag", text: subset.name + " → " + labels }));
+    }
+    if (policy.load_balancer) tags.append(el("span", { class: "tag", text: "LB:" + policy.load_balancer }));
+    if (policy.peer_authentication) tags.append(el("span", { class: "tag", text: "mTLS:" + policy.peer_authentication }));
+    if (policy.outlier_detection?.consecutive_5xx) {
+      tags.append(el("span", { class: "tag", text: "outlier:" + policy.outlier_detection.consecutive_5xx + "×5xx/" + policy.outlier_detection.ejection_time }));
+    }
+    block.append(tags);
+    root.append(block);
+  }
+}
+
+function renderSidecars(data) {
+  const body = $("sidecars");
+  body.replaceChildren();
+
+  const items = data.sidecars || [];
+  if (!items.length) {
+    body.append(el("tr", {}, el("td", { colspan: 6, class: "empty", text: "还没有 sidecar 心跳" })));
+    return;
+  }
+
+  for (const item of items) {
+    body.append(el("tr", {},
+      el("td", { class: "mono", text: item.identity }),
+      el("td", { text: item.service || "—" }),
+      el("td", { class: "mono", text: item.inbound || "—" }),
+      el("td", { class: "mono", text: "v" + (item.config_version ?? 0) }),
+      el("td", { class: "muted", text: fmtDateTime(item.cert_expiry) }),
+      el("td", { class: "muted", text: fmtTime(item.last_seen) }),
+    ));
+  }
+}
+
+function renderCA(data) {
+  const root = $("ca");
+  root.replaceChildren();
+
+  const ca = data.ca || {};
+  const kv = el("dl", { class: "kv" },
+    el("dt", { text: "Subject" }), el("dd", { class: "mono", text: ca.subject || "—" }),
+    el("dt", { text: "有效期" }), el("dd", { text: fmtDateTime(ca.not_before) + " → " + fmtDateTime(ca.not_after) }),
+    el("dt", { text: "累计签发" }), el("dd", { text: String(data.ca_issued_total ?? 0) }),
+  );
+  root.append(kv);
+
+  const issued = ca.issued || [];
+  if (issued.length) {
+    const table = el("table", { style: "margin-top:12px" },
+      el("thead", {}, el("tr", {},
+        el("th", { text: "Serial" }), el("th", { text: "SPIFFE ID" }),
+        el("th", { text: "Issued" }), el("th", { text: "Expires" }),
+      )),
+    );
+    const body = el("tbody");
+    for (const record of issued) {
+      body.append(el("tr", {},
+        el("td", { class: "mono", text: record.serial }),
+        el("td", { class: "mono", text: record.spiffe_id }),
+        el("td", { class: "muted", text: fmtTime(record.issued_at) }),
+        el("td", { class: "muted", text: fmtDateTime(record.not_after) }),
+      ));
+    }
+    table.append(body);
+    root.append(table);
+  }
+
+  if (data.config_error) {
+    root.append(el("div", { class: "error", text: "配置错误：" + data.config_error }));
+  }
+}
+
+function render(data) {
+  renderCards(data);
+  renderServices(data);
+  renderVirtualServices(data);
+  renderDestinationRules(data);
+  renderSidecars(data);
+  renderCA(data);
+}
+
+async function refresh() {
+  try {
+    const response = await fetch("/v1/status", { cache: "no-store" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const data = await response.json();
+    render(data);
+    $("dot").className = "dot online";
+    $("statusText").textContent = "在线 · 版本 " + data.version + " · " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  } catch (error) {
+    $("dot").className = "dot offline";
+    $("statusText").textContent = "连接失败：" + error.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

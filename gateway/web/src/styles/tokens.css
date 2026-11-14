@@ -1,0 +1,69 @@
+:root {
+  /* 暖色轮：主色焦糖橙，副色梅子棕，语义色保持同一暖调 */
+  --bg: #faf2e7;
+  --bg-glow: #f6ddc2;
+  --bg-rose: #f2ddd6;
+  --surface: #fff8ef;
+  --surface-2: #f3e3d0;
+  --surface-3: #ecd7bf;
+
+  --primary: #d97545;
+  --primary-deep: #96401f;
+  --primary-strong: #b4522c;
+  --primary-soft: #f2d6c3;
+
+  --secondary: #7e4e5d;
+  --secondary-soft: #eddde2;
+
+  --success: #436a34;
+  --success-bright: #5f8b4c;
+  --success-soft: #e5eedb;
+
+  --danger: #a33329;
+  --danger-bright: #c0453a;
+  --danger-soft: #f4dcd7;
+
+  --warning: #855a12;
+  --honey: #d9a441;
+  --warning-soft: #f6e8c9;
+
+  --ink: #35261e;
+  --ink-soft: #6f5647;
+  --ink-faint: #7c5d49;
+
+  --code-bg: #33241c;
+  --code-ink: #f7e9d8;
+
+  /* 字号：1.5 阶梯，锚点 18px */
+  --fs-caption: 12px;
+  --fs-body: 18px;
+  --fs-title: 27px;
+  --fs-page: 40.5px;
+  --fs-hero: 60.75px;
+
+  --lh-caption: 1.35;
+  --lh-body: 1.6;
+  --lh-title: 1.25;
+  --lh-page: 1.15;
+  --lh-hero: 1.05;
+
+  --radius-lg: 22px;
+  --radius-md: 14px;
+  --radius-pill: 999px;
+
+  --gap: 24px;
+  --pad-card: 32px;
+
+  --shadow-card:
+    0 24px 60px -40px rgba(120, 63, 38, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --shadow-button: 0 12px 24px -16px rgba(180, 82, 44, 0.85);
+
+  --font-sans:
+    "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    sans-serif;
+  --font-display:
+    "Iowan Old Style", "Palatino Linotype", "Songti SC", Georgia, serif;
+  --font-mono:
+    "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}

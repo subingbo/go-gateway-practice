@@ -1,0 +1,76 @@
+server:
+  addr: ":8080"
+  read_header_timeout: 5s
+  shutdown_timeout: 10s
+
+auth:
+  issuer: go-gateway-reference
+  audience: go-gateway
+  secret_file: data/jwt.secret
+  access_ttl: 5m
+  refresh_ttl: 30m
+  users:
+    - username: admin
+      user_id: admin-001
+      roles: [admin]
+      password_env: GATEWAY_ADMIN_PASSWORD
+    - username: viewer
+      user_id: viewer-001
+      roles: [viewer]
+      password_env: GATEWAY_VIEWER_PASSWORD
+
+cors:
+  allowed_origins:
+    - http://127.0.0.1:8080
+    - http://localhost:8080
+
+mesh:
+  control_plane_url: http://127.0.0.1:18000
+  namespace: default
+  identity: edge-gateway
+  cert_ttl: 10m
+
+rate_limit:
+  default:
+    rps: 50
+    burst: 100
+  routes:
+    "/api/orders/":
+      rps: 10
+      burst: 20
+
+routes:
+  - name: users
+    match:
+      path_prefix: /api/users/
+      methods: [GET]
+      strip_prefix: /api
+    upstream:
+      service: user-service
+      timeout: 5s
+    auth:
+      required: true
+      roles: [admin, viewer]
+
+  - name: orders
+    match:
+      path_prefix: /api/orders/
+      methods: [GET]
+      strip_prefix: /api
+    upstream:
+      service: order-service
+      timeout: 2s
+    auth:
+      required: true
+
+  - name: admin
+    match:
+      path_prefix: /api/admin/
+      methods: [GET]
+      strip_prefix: /api
+    upstream:
+      service: order-service
+      timeout: 3s
+    auth:
+      required: true
+      roles: [admin]

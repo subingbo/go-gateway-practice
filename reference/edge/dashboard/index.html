@@ -1,0 +1,950 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go Gateway Reference</title>
+  <style>
+    :root {
+      --bg: #0c1014;
+      --panel: #141a20;
+      --panel-2: #1a222b;
+      --line: #26313c;
+      --text: #e8edf2;
+      --muted: #8b98a8;
+      --accent: #5eead4;
+      --accent-2: #fbbf24;
+      --good: #4ade80;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background:
+        radial-gradient(1200px 500px at 15% -10%, rgba(94, 234, 212, .08), transparent 60%),
+        radial-gradient(900px 400px at 90% 0%, rgba(251, 191, 36, .05), transparent 55%),
+        var(--bg);
+      color: var(--text);
+      font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 14px 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(12, 16, 20, .88);
+      backdrop-filter: blur(10px);
+    }
+    .brand { font-size: 16px; font-weight: 700; letter-spacing: .3px; white-space: nowrap; }
+    .brand span { color: var(--accent); }
+    .conn { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 10px currentColor; }
+    .dot.online { background: var(--good); }
+    .dot.offline { background: var(--bad); }
+    .authbar { margin-left: auto; display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; }
+    .authbar strong { color: var(--text); }
+    main { padding: 20px 22px 48px; display: grid; gap: 18px; max-width: 1440px; margin: 0 auto; }
+    .hidden { display: none !important; }
+    h2 { margin: 0 0 12px; font-size: 13px; color: var(--muted); font-weight: 650; letter-spacing: .5px; text-transform: uppercase; }
+    h3 { margin: 0 0 8px; font-size: 13px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+    .grid { display: grid; gap: 18px; }
+    .grid.two { grid-template-columns: 1.1fr .9fr; }
+    .grid.three { grid-template-columns: repeat(3, 1fr); }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+    .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+    .metric .label { color: var(--muted); font-size: 12px; }
+    .metric .value { font-size: 23px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .metric .hint { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .login-wrap { max-width: 460px; margin: 10vh auto 0; width: 100%; }
+    .login-wrap h1 { margin: 0 0 6px; font-size: 24px; }
+    .login-wrap p { margin: 0 0 18px; color: var(--muted); }
+    label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 5px; }
+    input[type=text], input[type=password], select {
+      width: 100%;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 11px;
+      font: inherit;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(94, 234, 212, .12); }
+    button {
+      background: var(--accent);
+      color: #04231f;
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 15px;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.06); }
+    button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 500; }
+    button.ghost:hover { color: var(--text); border-color: var(--accent); }
+    button.danger { background: transparent; color: var(--bad); border: 1px solid rgba(248, 113, 113, .4); }
+    .row { display: flex; gap: 10px; align-items: center; }
+    .row > * { min-width: 0; }
+    .grow { flex: 1; }
+    .presets { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0; }
+    .preset { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; font-size: 12px; }
+    .preset:hover { color: var(--accent); border-color: var(--accent); }
+    .check { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .check input { accent-color: var(--accent); }
+    .error { color: var(--bad); font-size: 12px; min-height: 18px; margin-top: 8px; white-space: pre-wrap; }
+    .ok { color: var(--good); }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+    tr:last-child td { border-bottom: none; }
+    .mono { font-family: var(--mono); font-size: 11.5px; }
+    .muted { color: var(--muted); }
+    .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; border: 1px solid transparent; }
+    .badge.good { color: #052e16; background: var(--good); }
+    .badge.warn { color: #422006; background: var(--warn); }
+    .badge.bad { color: #450a0a; background: var(--bad); }
+    .badge.neutral { color: var(--muted); background: var(--panel-2); border-color: var(--line); }
+    .badge.HEALTHY { color: #052e16; background: var(--good); }
+    .badge.UNHEALTHY { color: #450a0a; background: var(--bad); }
+    .badge.UNKNOWN { color: #422006; background: var(--warn); }
+    .endpoint { display: inline-flex; align-items: center; gap: 5px; margin: 2px 6px 2px 0; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+    .endpoint .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+    .endpoint.bad .pulse { background: var(--bad); }
+    .endpoint.ejected .pulse { background: var(--warn); }
+    .response-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+    pre {
+      margin: 0;
+      background: #0a0e12;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      overflow: auto;
+      max-height: 330px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .logs { background: #0a0e12; border: 1px solid var(--line); border-radius: 8px; height: 300px; overflow: auto; padding: 10px; font-family: var(--mono); font-size: 11px; }
+    .log-line { padding: 2px 0; border-bottom: 1px dashed rgba(38, 49, 60, .5); white-space: pre-wrap; word-break: break-word; }
+    .log-time { color: #64748b; }
+    .log-info { color: var(--accent); }
+    .log-warn { color: var(--warn); }
+    .log-error { color: var(--bad); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .panel-head h2 { margin: 0; }
+    .mesh-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .chip { border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); border-radius: 999px; padding: 3px 9px; font-size: 11px; }
+    .chip strong { color: var(--text); }
+    .empty { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
+    .service-block { border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; background: var(--panel-2); }
+    .service-block:last-child { margin-bottom: 0; }
+    .service-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+    .service-head strong { font-size: 12.5px; }
+    .footer { color: var(--muted); font-size: 11px; text-align: center; padding-top: 6px; }
+    @media (max-width: 1000px) {
+      .grid.two, .grid.three { grid-template-columns: 1fr; }
+      header { flex-wrap: wrap; gap: 10px; }
+      .authbar { margin-left: 0; }
+      main { padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand">Go Gateway <span>Reference</span></div>
+  <div class="conn"><span id="connDot" class="dot"></span><span id="connText">连接中…</span></div>
+  <div id="authbar" class="authbar hidden">
+    <span><strong id="userLabel">—</strong> <span id="rolesLabel" class="muted"></span></span>
+    <span>Token <span id="tokenCountdown" class="mono">—</span></span>
+    <button id="logoutBtn" class="ghost" type="button">退出</button>
+  </div>
+</header>
+
+<main>
+  <section id="loginView" class="login-wrap">
+    <div class="card">
+      <h1>网关控制台</h1>
+      <p>登录后查看路由、指标、网格状态和实时日志。账号由 <span class="mono">configs/gateway.yaml</span> 和环境变量提供。</p>
+      <form id="loginForm">
+        <label for="username">用户名</label>
+        <input id="username" type="text" autocomplete="username" placeholder="admin" required>
+        <label for="password">密码</label>
+        <input id="password" type="password" autocomplete="current-password" placeholder="devstack 启动时会打印密码" required>
+        <div id="loginError" class="error"></div>
+        <button id="loginBtn" type="submit" style="width:100%;margin-top:8px">登录</button>
+      </form>
+      <div class="footer">提示：devstack 会为 admin / viewer 生成随机密码并打印在终端。</div>
+    </div>
+  </section>
+
+  <div id="appView" class="hidden" style="display:grid;gap:18px">
+    <section class="cards" id="metricsCards"></section>
+
+    <div class="grid two">
+      <section class="card">
+        <div class="panel-head"><h2>请求构造器</h2><span class="muted mono" id="requestHint">GET</span></div>
+        <div class="presets" id="presets">
+          <button class="preset" data-path="/api/users/1" type="button">用户详情</button>
+          <button class="preset" data-path="/api/users/slow?ms=3000" type="button">慢用户</button>
+          <button class="preset" data-path="/api/orders/1" type="button">订单详情</button>
+          <button class="preset" data-path="/api/orders/slow" type="button">慢订单</button>
+          <button class="preset" data-path="/api/users/faulty" type="button">故障注入</button>
+          <button class="preset" data-path="/api/admin/ping" type="button">管理员接口</button>
+          <button class="preset" data-path="/api/whoami" type="button">whoami</button>
+        </div>
+        <div class="row">
+          <input id="requestPath" class="grow mono" type="text" value="/api/users/1" spellcheck="false">
+          <button id="sendBtn" type="button">发送</button>
+        </div>
+        <label class="check"><input id="canary" type="checkbox"> 带上 <span class="mono">x-canary: true</span>（命中 v2）</label>
+        <div id="requestError" class="error"></div>
+        <div class="muted" style="font-size:11.5px;margin-top:8px">请求会带上当前 access token；只有以 <span class="mono">/</span> 开头的网关路径允许发送。</div>
+      </section>
+
+      <section class="card">
+        <div class="panel-head"><h2>响应</h2><span id="responseMeta" class="muted"></span></div>
+        <div id="responseBody" class="empty">还没有发送请求</div>
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="panel-head"><h2>路由与上游</h2><span class="muted" id="routesUpdated"></span></div>
+      <table>
+        <thead><tr><th>Route</th><th>Match</th><th>Upstream</th><th>Auth</th><th>限流</th><th>实例</th></tr></thead>
+        <tbody id="routesBody"></tbody>
+      </table>
+    </section>
+
+    <div class="grid two">
+      <section class="card">
+        <div class="panel-head"><h2>Mesh 控制面</h2><span class="muted" id="meshUpdated"></span></div>
+        <div id="meshPanel" class="empty">加载中…</div>
+      </section>
+
+      <section class="card">
+        <div class="panel-head">
+          <h2>实时日志</h2>
+          <div class="row">
+            <button id="clearLogs" class="ghost" type="button">清空</button>
+          </div>
+        </div>
+        <div id="logPanel" class="logs"></div>
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="panel-head"><h2>最近请求</h2><span class="muted" id="statsUpdated"></span></div>
+      <table>
+        <thead><tr><th>时间</th><th>方法</th><th>路径</th><th>Route</th><th>状态</th><th>耗时</th><th>用户</th></tr></thead>
+        <tbody id="recentBody"></tbody>
+      </table>
+    </section>
+  </div>
+</main>
+
+<script>
+const TOKEN_KEY = "gateway.reference.tokens";
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  accessToken: "",
+  refreshToken: "",
+  userID: "",
+  roles: [],
+  accessExpiresAt: 0,
+  refreshExpiresAt: 0,
+  timers: [],
+  logsSource: null,
+  logLines: [],
+  stats: null,
+};
+
+function loadTokens() {
+  try {
+    const raw = sessionStorage.getItem(TOKEN_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    state.accessToken = data.accessToken || "";
+    state.refreshToken = data.refreshToken || "";
+    state.userID = data.userID || "";
+    state.roles = data.roles || [];
+    state.accessExpiresAt = data.accessExpiresAt || 0;
+    state.refreshExpiresAt = data.refreshExpiresAt || 0;
+  } catch (error) {
+    sessionStorage.removeItem(TOKEN_KEY);
+  }
+}
+
+function persistTokens() {
+  sessionStorage.setItem(TOKEN_KEY, JSON.stringify({
+    accessToken: state.accessToken,
+    refreshToken: state.refreshToken,
+    userID: state.userID,
+    roles: state.roles,
+    accessExpiresAt: state.accessExpiresAt,
+    refreshExpiresAt: state.refreshExpiresAt,
+  }));
+}
+
+function saveTokens(data) {
+  state.accessToken = data.access_token || "";
+  state.refreshToken = data.refresh_token || "";
+  state.userID = data.user_id || "";
+  state.roles = data.roles || [];
+  state.accessExpiresAt = data.access_expires_at
+    ? new Date(data.access_expires_at).getTime()
+    : Date.now() + (data.expires_in || 0) * 1000;
+  state.refreshExpiresAt = data.refresh_expires_at
+    ? new Date(data.refresh_expires_at).getTime()
+    : Date.now() + (data.refresh_expires_in || 0) * 1000;
+  persistTokens();
+  renderAuth();
+  startPolling();
+  connectLogs();
+}
+
+function clearSession() {
+  state.accessToken = "";
+  state.refreshToken = "";
+  state.userID = "";
+  state.roles = [];
+  state.accessExpiresAt = 0;
+  state.refreshExpiresAt = 0;
+  sessionStorage.removeItem(TOKEN_KEY);
+  stopPolling();
+  closeLogs();
+  renderAuth();
+}
+
+function renderAuth() {
+  const loggedIn = Boolean(state.accessToken);
+  $("loginView").classList.toggle("hidden", loggedIn);
+  $("appView").classList.toggle("hidden", !loggedIn);
+  $("authbar").classList.toggle("hidden", !loggedIn);
+
+  if (loggedIn) {
+    $("userLabel").textContent = state.userID || "user";
+    $("rolesLabel").textContent = state.roles.length ? "· " + state.roles.join(", ") : "";
+    updateCountdown();
+  }
+}
+
+function updateCountdown() {
+  if (!state.accessToken) return;
+  const remaining = Math.max(0, Math.floor((state.accessExpiresAt - Date.now()) / 1000));
+  const minutes = Math.floor(remaining / 60);
+  const seconds = String(remaining % 60).padStart(2, "0");
+  $("tokenCountdown").textContent = minutes + ":" + seconds;
+}
+
+async function ensureToken() {
+  if (!state.accessToken) return false;
+  if (state.accessExpiresAt - Date.now() > 30000) return true;
+  if (!state.refreshToken) {
+    clearSession();
+    return false;
+  }
+
+  try {
+    const response = await fetch("/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: state.refreshToken }),
+    });
+    if (!response.ok) {
+      clearSession();
+      return false;
+    }
+    saveTokens(await response.json());
+    return true;
+  } catch (error) {
+    clearSession();
+    return false;
+  }
+}
+
+async function api(path, options = {}) {
+  if (!(await ensureToken())) throw new Error("登录已失效，请重新登录");
+  const headers = new Headers(options.headers || {});
+  headers.set("Authorization", "Bearer " + state.accessToken);
+  const response = await fetch(path, { ...options, headers });
+  if (response.status === 401) {
+    clearSession();
+    throw new Error("登录已失效，请重新登录");
+  }
+  return response;
+}
+
+async function login(event) {
+  event.preventDefault();
+  $("loginError").textContent = "";
+  $("loginBtn").disabled = true;
+
+  try {
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: $("username").value.trim(),
+        password: $("password").value,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      $("loginError").textContent = data.error || ("登录失败：HTTP " + response.status);
+      return;
+    }
+
+    $("password").value = "";
+    saveTokens(data);
+  } catch (error) {
+    $("loginError").textContent = "登录失败：" + error.message;
+  } finally {
+    $("loginBtn").disabled = false;
+  }
+}
+
+async function logout() {
+  try {
+    await fetch("/auth/logout", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + state.accessToken,
+      },
+      body: JSON.stringify({ refresh_token: state.refreshToken }),
+    });
+  } catch (error) {
+    // 即使网络失败也清理本地状态。
+  }
+  clearSession();
+}
+
+function startPolling() {
+  stopPolling();
+  if (!state.accessToken) return;
+
+  refreshAll();
+  state.timers.push(setInterval(loadStats, 2000));
+  state.timers.push(setInterval(loadRoutes, 5000));
+  state.timers.push(setInterval(loadMesh, 5000));
+  state.timers.push(setInterval(updateCountdown, 1000));
+  state.timers.push(setInterval(() => { ensureToken(); }, 10000));
+}
+
+function stopPolling() {
+  for (const timer of state.timers) clearInterval(timer);
+  state.timers = [];
+}
+
+async function refreshAll() {
+  await Promise.allSettled([loadStats(), loadRoutes(), loadMesh()]);
+}
+
+async function loadStats() {
+  try {
+    const response = await api("/api/stats");
+    if (!response.ok) return;
+    const data = await response.json();
+    state.stats = data;
+    renderMetrics(data);
+    renderRecent(data.recent || []);
+    $("statsUpdated").textContent = "更新于 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    setConnection(true);
+  } catch (error) {
+    setConnection(false, error.message);
+  }
+}
+
+async function loadRoutes() {
+  try {
+    const response = await api("/api/routes");
+    if (!response.ok) return;
+    const data = await response.json();
+    renderRoutes(data.routes || []);
+    $("routesUpdated").textContent = "更新于 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  } catch (error) {
+    // 顶部连接状态已经由 stats 轮询维护。
+  }
+}
+
+async function loadMesh() {
+  try {
+    const response = await api("/api/mesh/status");
+    if (!response.ok) {
+      $("meshPanel").innerHTML = '<div class="empty">Mesh 未启用或控制面不可用</div>';
+      return;
+    }
+    const data = await response.json();
+    renderMesh(data);
+    $("meshUpdated").textContent = "版本 " + (data.version ?? "—");
+  } catch (error) {
+    $("meshPanel").innerHTML = '<div class="empty">Mesh 状态加载失败</div>';
+  }
+}
+
+function setConnection(online, message) {
+  $("connDot").className = "dot " + (online ? "online" : "offline");
+  $("connText").textContent = online
+    ? "在线 · " + new Date().toLocaleTimeString("zh-CN", { hour12: false })
+    : "连接失败" + (message ? "：" + message : "");
+}
+
+function metricCard(label, value, hint) {
+  const card = document.createElement("div");
+  card.className = "metric";
+  const labelNode = document.createElement("div");
+  labelNode.className = "label";
+  labelNode.textContent = label;
+  const valueNode = document.createElement("div");
+  valueNode.className = "value";
+  valueNode.textContent = value;
+  card.append(labelNode, valueNode);
+  if (hint) {
+    const hintNode = document.createElement("div");
+    hintNode.className = "hint";
+    hintNode.textContent = hint;
+    card.append(hintNode);
+  }
+  return card;
+}
+
+function renderMetrics(data) {
+  const classes = data.status_classes || {};
+  const total = data.total_requests || 0;
+  const errors = (classes["4xx"] || 0) + (classes["5xx"] || 0);
+  const errorRate = total > 0 ? (errors / total * 100).toFixed(1) + "%" : "0%";
+
+  $("metricsCards").replaceChildren(
+    metricCard("总请求", String(total), "进程启动以来"),
+    metricCard("RPS", String(data.rps ?? 0), "最近 60 秒"),
+    metricCard("P95 延迟", (data.p95_latency_ms ?? 0) + " ms", "最近 500 次"),
+    metricCard("错误率", errorRate, "4xx + 5xx"),
+    metricCard("进行中", String(data.in_flight ?? 0), "in-flight"),
+  );
+}
+
+function statusBadge(status) {
+  const node = document.createElement("span");
+  let tone = "neutral";
+  if (status >= 200 && status < 300) tone = "good";
+  else if (status >= 300 && status < 400) tone = "neutral";
+  else if (status >= 400 && status < 500) tone = "warn";
+  else if (status >= 500) tone = "bad";
+  node.className = "badge " + tone;
+  node.textContent = String(status);
+  return node;
+}
+
+function renderRoutes(routes) {
+  const body = $("routesBody");
+  body.replaceChildren();
+
+  if (!routes.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.className = "empty";
+    cell.textContent = "没有路由";
+    row.append(cell);
+    body.append(row);
+    return;
+  }
+
+  for (const route of routes) {
+    const row = document.createElement("tr");
+
+    const name = document.createElement("td");
+    name.textContent = route.name;
+
+    const match = document.createElement("td");
+    match.className = "mono muted";
+    const methods = (route.match.methods || []).join(",") || "*";
+    match.textContent = methods + " " + route.match.path_prefix +
+      (route.match.strip_prefix ? " → " + route.match.strip_prefix : "");
+
+    const upstream = document.createElement("td");
+    upstream.className = "mono";
+    upstream.textContent = route.upstream.service
+      ? route.upstream.service + (route.upstream.subset ? "/" + route.upstream.subset : "")
+      : (route.upstream.instances || []).join(", ");
+
+    const auth = document.createElement("td");
+    auth.className = "muted";
+    auth.textContent = route.auth.required
+      ? ((route.auth.roles || []).join(", ") || "已登录")
+      : "公开";
+
+    const limit = document.createElement("td");
+    limit.className = "muted mono";
+    limit.textContent = route.rate_limit
+      ? route.rate_limit.rps + " rps / " + route.rate_limit.burst
+      : "默认";
+
+    const endpoints = document.createElement("td");
+    const list = route.endpoints || [];
+    if (!list.length) {
+      const empty = document.createElement("span");
+      empty.className = "muted";
+      empty.textContent = "无实例";
+      endpoints.append(empty);
+    } else {
+      for (const endpoint of list) {
+        const item = document.createElement("span");
+        item.className = "endpoint" + (endpoint.ejected ? " ejected" : (!endpoint.healthy ? " bad" : ""));
+        const pulse = document.createElement("span");
+        pulse.className = "pulse";
+        const text = document.createElement("span");
+        const prefix = endpoint.subset ? endpoint.subset + "/" : "";
+        text.textContent = prefix + endpoint.addr + (endpoint.ejected ? " (ejected)" : (!endpoint.healthy ? " (down)" : ""));
+        item.append(pulse, text);
+        endpoints.append(item);
+      }
+    }
+
+    row.append(name, match, upstream, auth, limit, endpoints);
+    body.append(row);
+  }
+}
+
+function renderRecent(records) {
+  const body = $("recentBody");
+  body.replaceChildren();
+
+  if (!records.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 7;
+    cell.className = "empty";
+    cell.textContent = "还没有请求";
+    row.append(cell);
+    body.append(row);
+    return;
+  }
+
+  for (const record of [...records].reverse()) {
+    const row = document.createElement("tr");
+
+    const time = document.createElement("td");
+    time.className = "muted mono";
+    time.textContent = new Date(record.time).toLocaleTimeString("zh-CN", { hour12: false });
+
+    const method = document.createElement("td");
+    method.className = "mono";
+    method.textContent = record.method;
+
+    const path = document.createElement("td");
+    path.className = "mono";
+    path.textContent = record.path;
+
+    const route = document.createElement("td");
+    route.className = "muted";
+    route.textContent = record.route;
+
+    const status = document.createElement("td");
+    status.append(statusBadge(record.status));
+
+    const duration = document.createElement("td");
+    duration.className = "mono";
+    duration.textContent = (record.duration_ms ?? 0) + " ms";
+
+    const user = document.createElement("td");
+    user.className = "muted mono";
+    user.textContent = record.user_id || "—";
+
+    row.append(time, method, path, route, status, duration, user);
+    body.append(row);
+  }
+}
+
+function renderMesh(data) {
+  const panel = $("meshPanel");
+  panel.replaceChildren();
+
+  const services = data.services || [];
+  const sidecars = data.sidecars || [];
+  const ca = data.ca || {};
+
+  let instances = 0;
+  let healthy = 0;
+  for (const service of services) {
+    for (const instance of service.instances || []) {
+      instances++;
+      if (instance.status === "HEALTHY") healthy++;
+    }
+  }
+
+  const summary = document.createElement("div");
+  summary.className = "mesh-summary";
+  for (const [label, value] of [
+    ["版本", data.version ?? "—"],
+    ["服务", services.length],
+    ["实例", healthy + " / " + instances],
+    ["Sidecar", sidecars.length],
+    ["签发证书", data.ca_issued_total ?? 0],
+  ]) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = label + " <strong></strong>";
+    chip.querySelector("strong").textContent = String(value);
+    summary.append(chip);
+  }
+  panel.append(summary);
+
+  if (!services.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "还没有实例注册";
+    panel.append(empty);
+  }
+
+  for (const service of services) {
+    const block = document.createElement("div");
+    block.className = "service-block";
+
+    const head = document.createElement("div");
+    head.className = "service-head";
+    const name = document.createElement("strong");
+    name.textContent = service.name;
+    const count = document.createElement("span");
+    count.className = "muted mono";
+    count.textContent = (service.instances || []).length + " instances";
+    head.append(name, count);
+
+    const list = document.createElement("div");
+    for (const instance of service.instances || []) {
+      const item = document.createElement("div");
+      item.className = "row";
+      item.style.marginTop = "3px";
+
+      const badge = document.createElement("span");
+      badge.className = "badge " + (instance.status || "UNKNOWN");
+      badge.textContent = instance.status || "UNKNOWN";
+
+      const address = document.createElement("span");
+      address.className = "mono muted";
+      address.textContent = instance.address;
+
+      const labels = document.createElement("span");
+      labels.className = "mono muted";
+      labels.textContent = Object.entries(instance.labels || {}).map(([k, v]) => k + "=" + v).join(",");
+
+      item.append(badge, address, labels);
+      list.append(item);
+    }
+
+    block.append(head, list);
+    panel.append(block);
+  }
+
+  if (ca.not_after) {
+    const caLine = document.createElement("div");
+    caLine.className = "muted mono";
+    caLine.style.marginTop = "8px";
+    caLine.style.fontSize = "11px";
+    caLine.textContent = "根证书到期：" + new Date(ca.not_after).toLocaleString("zh-CN", { hour12: false });
+    panel.append(caLine);
+  }
+
+  if (data.config_error) {
+    const error = document.createElement("div");
+    error.className = "error";
+    error.textContent = "配置错误：" + data.config_error;
+    panel.append(error);
+  }
+}
+
+async function sendRequest() {
+  $("requestError").textContent = "";
+
+  const path = $("requestPath").value.trim();
+  if (!path.startsWith("/")) {
+    $("requestError").textContent = "只允许以 / 开头的网关路径";
+    return;
+  }
+
+  const headers = {};
+  if ($("canary").checked) headers["x-canary"] = "true";
+
+  $("sendBtn").disabled = true;
+  const start = performance.now();
+
+  try {
+    const response = await api(path, { headers });
+    const text = await response.text();
+    const duration = performance.now() - start;
+    renderResponse(response, text, duration, path);
+  } catch (error) {
+    $("requestError").textContent = error.message;
+  } finally {
+    $("sendBtn").disabled = false;
+  }
+}
+
+function renderResponse(response, text, duration, path) {
+  $("responseMeta").replaceChildren();
+  const status = statusBadge(response.status);
+  const meta = document.createElement("span");
+  meta.className = "muted mono";
+  meta.textContent = path + " · " + duration.toFixed(1) + " ms";
+  $("responseMeta").append(status, meta);
+
+  let pretty = text;
+  let contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    try {
+      pretty = JSON.stringify(JSON.parse(text), null, 2);
+    } catch (error) {
+      // 保留原文
+    }
+  }
+
+  const wrapper = document.createElement("div");
+
+  const body = document.createElement("pre");
+  body.textContent = pretty || "(empty body)";
+  wrapper.append(body);
+
+  const headers = document.createElement("details");
+  headers.style.marginTop = "10px";
+  const summary = document.createElement("summary");
+  summary.className = "muted";
+  summary.style.cursor = "pointer";
+  summary.textContent = "响应头";
+  const headerText = document.createElement("pre");
+  const lines = [];
+  response.headers.forEach((value, key) => lines.push(key + ": " + value));
+  headerText.textContent = lines.join("\n");
+  headers.append(summary, headerText);
+  wrapper.append(headers);
+
+  $("responseBody").replaceChildren(wrapper);
+  $("responseBody").classList.remove("empty");
+}
+
+function formatLogLine(raw) {
+  try {
+    const entry = JSON.parse(raw);
+    const time = entry.time ? new Date(entry.time).toLocaleTimeString("zh-CN", { hour12: false }) : "";
+    const level = String(entry.level || "INFO").toUpperCase();
+    const message = entry.msg || "";
+    const extras = [];
+    for (const key of ["request_id", "route", "status", "duration_ms", "user_id", "destination", "source", "error"]) {
+      if (entry[key] !== undefined && entry[key] !== "") extras.push(key + "=" + entry[key]);
+    }
+    return { time, level, message, extras: extras.join(" ") };
+  } catch (error) {
+    return { time: "", level: "INFO", message: raw, extras: "" };
+  }
+}
+
+function renderLogs() {
+  const panel = $("logPanel");
+  const atBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 30;
+
+  panel.replaceChildren();
+  for (const line of state.logLines) {
+    const node = document.createElement("div");
+    node.className = "log-line";
+
+    if (line.time) {
+      const time = document.createElement("span");
+      time.className = "log-time";
+      time.textContent = line.time + " ";
+      node.append(time);
+    }
+
+    const level = document.createElement("span");
+    level.className = "log-" + line.level.toLowerCase();
+    level.textContent = line.level + " ";
+    node.append(level);
+
+    const message = document.createElement("span");
+    message.textContent = line.message;
+    node.append(message);
+
+    if (line.extras) {
+      const extras = document.createElement("span");
+      extras.className = "muted";
+      extras.textContent = "  " + line.extras;
+      node.append(extras);
+    }
+
+    panel.append(node);
+  }
+
+  if (atBottom) panel.scrollTop = panel.scrollHeight;
+}
+
+function connectLogs() {
+  closeLogs();
+  if (!state.accessToken) return;
+
+  const source = new EventSource("/api/logs/stream?access_token=" + encodeURIComponent(state.accessToken));
+  state.logsSource = source;
+
+  source.addEventListener("log", (event) => {
+    state.logLines.push(formatLogLine(event.data));
+    if (state.logLines.length > 300) state.logLines.shift();
+    renderLogs();
+  });
+
+  source.onerror = () => {
+    source.close();
+    if (state.logsSource === source) state.logsSource = null;
+    if (state.accessToken) {
+      setTimeout(connectLogs, 3000);
+    }
+  };
+}
+
+function closeLogs() {
+  if (state.logsSource) {
+    state.logsSource.close();
+    state.logsSource = null;
+  }
+}
+
+function bindEvents() {
+  $("loginForm").addEventListener("submit", login);
+  $("logoutBtn").addEventListener("click", logout);
+  $("sendBtn").addEventListener("click", sendRequest);
+  $("requestPath").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") sendRequest();
+  });
+
+  $("presets").addEventListener("click", (event) => {
+    const button = event.target.closest(".preset");
+    if (!button) return;
+    $("requestPath").value = button.dataset.path || "";
+    sendRequest();
+  });
+
+  $("clearLogs").addEventListener("click", () => {
+    state.logLines = [];
+    renderLogs();
+  });
+}
+
+loadTokens();
+bindEvents();
+renderAuth();
+
+if (state.accessToken) {
+  startPolling();
+  connectLogs();
+}
+</script>
+</body>
+</html>
