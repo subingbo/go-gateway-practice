@@ -11,6 +11,16 @@ func main() {
 	// 创建订单服务自己的路由器
 	mux := http.NewServeMux()
 
+	// 健康检查接口
+	mux.HandleFunc("GET /health", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Order Service OK"))
+	})
+
 	// 注册查询订单接口
 
 	mux.HandleFunc("GET /orders/slow", func(

@@ -23,6 +23,16 @@ func main() {
 		fmt.Fprintf(w, "Path: %s\n", r.URL.Path)
 	})
 
+	// 健康检查接口
+	mux.HandleFunc("GET /health", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("User Service OK"))
+	})
+
 	// 启动用户服务
 	log.Println("User Service listening on :9090")
 

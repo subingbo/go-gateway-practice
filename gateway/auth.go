@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -84,6 +83,8 @@ func (s *MemoryUserStore) Authenticate(
 func loginHandler(
 	secret []byte,
 	users *MemoryUserStore,
+	refreshManager *RefreshTokenManager,
+	cookieSecure bool,
 ) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +116,7 @@ func loginHandler(
 			return
 		}
 
+		// 1. 生成 Access Token
 		accessToken, err := generateJWT(
 			userID,
 			secret,
@@ -126,6 +128,26 @@ func loginHandler(
 			return
 		}
 
+		// 2. 生成并保存 Refresh Token
+		refreshGrant, err := refreshManager.Issue(
+			r.Context(),
+			userID,
+		)
+		if err != nil {
+			log.Printf("Issue refresh token failed: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		// 3. 将 Refresh Token 放入 HttpOnly Cookie
+		setRefreshTokenCookie(
+			w,
+			refreshGrant.Token,
+			time.Duration(refreshGrant.ExpiresIn)*time.Second,
+			cookieSecure,
+		)
+
+		// 4. 返回 Access Token
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 
@@ -138,5 +160,176 @@ func loginHandler(
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			log.Printf("Encode response failed: %v", err)
 		}
+	}
+}
+
+// 设置 Refresh Token Cookie
+func setRefreshTokenCookie(
+	w http.ResponseWriter,
+	token string,
+	ttl time.Duration,
+	secure bool,
+) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    token,
+		Path:     "/auth",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(ttl.Seconds()),
+		Expires:  time.Now().Add(ttl),
+	})
+}
+
+// 清除 Refresh Token Cookie
+func clearRefreshTokenCookie(
+	w http.ResponseWriter,
+	secure bool,
+) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/auth",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	})
+}
+
+// Refresh Token 续签接口
+func refreshHandler(
+	secret []byte,
+	manager *RefreshTokenManager,
+	cookieSecure bool,
+) http.HandlerFunc {
+
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		w.Header().Set("Cache-Control", "no-store")
+
+		// 1. 获取 Refresh Token Cookie
+		cookie, err := r.Cookie("refresh_token")
+		if err != nil || cookie.Value == "" {
+			clearRefreshTokenCookie(w, cookieSecure)
+			http.Error(w, "Refresh token required", http.StatusUnauthorized)
+			return
+		}
+
+		// 2. 使用旧 Refresh Token 换取新 Token
+		rotated, err := manager.Rotate(
+			r.Context(),
+			cookie.Value,
+		)
+		if err != nil {
+
+			clearRefreshTokenCookie(w, cookieSecure)
+
+			if errors.Is(err, errInvalidRefreshToken) ||
+				errors.Is(err, errRefreshTokenReuse) {
+
+				if errors.Is(err, errRefreshTokenReuse) {
+					log.Printf("Refresh token reuse detected")
+				}
+
+				http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
+				return
+			}
+
+			log.Printf("Rotate refresh token failed: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		// 3. 根据 Redis 返回的 UserID 签发新的 Access Token
+		accessToken, err := generateJWT(
+			rotated.UserID,
+			secret,
+			accessTokenTTL,
+		)
+		if err != nil {
+
+			// 如果 Access Token 签发失败，撤销刚刚生成的新 Refresh Token
+			if _, revokeErr := manager.Revoke(
+				r.Context(),
+				rotated.Token,
+			); revokeErr != nil {
+				log.Printf("Revoke new refresh token failed: %v", revokeErr)
+			}
+
+			clearRefreshTokenCookie(w, cookieSecure)
+
+			log.Printf("Generate JWT failed: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		// 4. 设置新的 Refresh Token Cookie
+		setRefreshTokenCookie(
+			w,
+			rotated.Token,
+			time.Duration(rotated.ExpiresIn)*time.Second,
+			cookieSecure,
+		)
+
+		// 5. 返回新的 Access Token
+		w.Header().Set("Content-Type", "application/json")
+
+		response := LoginResponse{
+			AccessToken: accessToken,
+			TokenType:   "Bearer",
+			ExpiresIn:   int64(accessTokenTTL.Seconds()),
+		}
+
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			log.Printf("Encode refresh response failed: %v", err)
+		}
+	}
+}
+
+// 退出登录接口
+func logoutHandler(
+	manager *RefreshTokenManager,
+	cookieSecure bool,
+) http.HandlerFunc {
+
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		w.Header().Set("Cache-Control", "no-store")
+
+		// 1. 获取 Refresh Token
+		cookie, err := r.Cookie("refresh_token")
+
+		// 2. 如果 Cookie 存在，撤销 Redis 中的 Token
+		if err == nil && cookie.Value != "" {
+
+			_, revokeErr := manager.Revoke(
+				r.Context(),
+				cookie.Value,
+			)
+
+			if revokeErr != nil &&
+				!errors.Is(revokeErr, errInvalidRefreshToken) {
+
+				log.Printf("Revoke refresh token failed: %v", revokeErr)
+
+				clearRefreshTokenCookie(w, cookieSecure)
+
+				http.Error(
+					w,
+					"Logout temporarily unavailable",
+					http.StatusServiceUnavailable,
+				)
+				return
+			}
+		}
+
+		// 3. 清除浏览器 Cookie
+		clearRefreshTokenCookie(w, cookieSecure)
+
+		// 4. 返回 204 No Content
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

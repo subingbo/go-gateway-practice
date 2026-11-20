@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -11,24 +12,29 @@ const apiTimeout = 2 * time.Second
 
 // proxyRoute 描述一条需要反向代理的 API 路由
 type proxyRoute struct {
-	Name   string
-	Path   string
-	Target string
-	Prefix string
+	Name    string
+	Path    string
+	Targets []string
+	Prefix  string
 }
 
 // proxyRoutes 是网关当前代理的上游路由表
 var proxyRoutes = []proxyRoute{
 	{
-		Name:   "用户服务",
-		Path:   "/api/users/",
-		Target: "http://127.0.0.1:9090",
+		Name: "用户服务",
+		Path: "/api/users/",
+		Targets: []string{
+			"http://127.0.0.1:9090",
+			"http://127.0.0.1:9092",
+		},
 		Prefix: "/api",
 	},
 	{
-		Name:   "订单服务",
-		Path:   "/api/orders/",
-		Target: "http://127.0.0.1:9091",
+		Name: "订单服务",
+		Path: "/api/orders/",
+		Targets: []string{
+			"http://127.0.0.1:9091",
+		},
 		Prefix: "/api",
 	},
 }
@@ -46,14 +52,14 @@ type routeInfo struct {
 
 // routeInfos 汇总代理路由与网关自身的接口
 func routeInfos() []routeInfo {
-	infos := make([]routeInfo, 0, len(proxyRoutes)+5)
+	infos := make([]routeInfo, 0, len(proxyRoutes)+7)
 
 	for _, route := range proxyRoutes {
 		infos = append(infos, routeInfo{
 			Name:        route.Name,
 			Method:      "*",
 			Path:        route.Path,
-			Upstream:    route.Target,
+			Upstream:    strings.Join(route.Targets, ", "),
 			Auth:        true,
 			TimeoutMS:   apiTimeout.Milliseconds(),
 			Description: "反向代理，转发前剥离 /api 前缀",
@@ -67,6 +73,20 @@ func routeInfos() []routeInfo {
 			Path:        "/auth/login",
 			Auth:        false,
 			Description: "校验密码并签发 JWT",
+		},
+		routeInfo{
+			Name:        "刷新令牌",
+			Method:      "POST",
+			Path:        "/auth/refresh",
+			Auth:        false,
+			Description: "使用 Refresh Token Cookie 换取新的双 Token",
+		},
+		routeInfo{
+			Name:        "退出登录",
+			Method:      "POST",
+			Path:        "/auth/logout",
+			Auth:        false,
+			Description: "撤销 Refresh Token 并清除 Cookie",
 		},
 		routeInfo{
 			Name:        "当前用户",
