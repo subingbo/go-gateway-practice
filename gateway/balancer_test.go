@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -105,6 +107,36 @@ func TestRoundRobinBalancerSequence(t *testing.T) {
 				got,
 			)
 		}
+	}
+}
+
+// 失败重试必须排除刚刚失败的实例，否则重试可能再次打到同一台机器。
+func TestRoundRobinBalancerNextExcludingSkipsFailedTarget(t *testing.T) {
+	t.Parallel()
+
+	balancer, err := NewRoundRobinBalancer([]string{
+		"http://backend-a.internal",
+		"http://backend-b.internal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, item := range balancer.targets {
+		item.healthy.Store(true)
+	}
+
+	failed, err := url.Parse("http://backend-a.internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := balancer.NextExcluding(failed)
+	if got == nil {
+		t.Fatal("NextExcluding() = nil, want backend-b")
+	}
+	if want := "http://backend-b.internal"; got.String() != want {
+		t.Fatalf("NextExcluding() = %s, want %s", got, want)
 	}
 }
 
@@ -502,4 +534,217 @@ func TestBalancerConcurrentAddRemoveAndNext(t *testing.T) {
 	}()
 
 	wg.Wait()
+}
+
+// Nacos 刷新实例列表时，地址没有变化的实例应保留原来的健康状态。
+// 否则每次刷新都会把正常实例重新变成“未健康”，造成短暂的 503。
+func TestBalancerReplaceTargetsPreservesExistingHealth(t *testing.T) {
+
+	balancer, err := NewRoundRobinBalancer(
+		[]string{
+			"http://127.0.0.1:9090",
+			"http://127.0.0.1:9091",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	balancer.targets[0].healthy.Store(true)
+	balancer.targets[0].checked = true
+
+	err = balancer.ReplaceTargets(
+		[]string{
+			"http://127.0.0.1:9090",
+			"http://127.0.0.1:9092",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := balancer.ListTargets()
+	want := []UpstreamStatus{
+		{Target: "http://127.0.0.1:9090", Healthy: true},
+		{Target: "http://127.0.0.1:9092", Healthy: false},
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListTargets() = %#v, want %#v", got, want)
+	}
+}
+
+// 新列表中只要有一个非法地址，就不能破坏当前正在使用的完整列表。
+func TestBalancerReplaceTargetsRejectsInvalidListAtomically(t *testing.T) {
+
+	balancer, err := NewRoundRobinBalancer(
+		[]string{"http://127.0.0.1:9090"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = balancer.ReplaceTargets(
+		[]string{
+			"http://127.0.0.1:9091",
+			"not-a-valid-target",
+		},
+	)
+	if err == nil {
+		t.Fatal("ReplaceTargets() error = nil, want invalid-target error")
+	}
+
+	got := balancer.ListTargets()
+	want := []UpstreamStatus{
+		{Target: "http://127.0.0.1:9090", Healthy: false},
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListTargets() = %#v, want unchanged %#v", got, want)
+	}
+}
+
+func TestBalancerSkipsPassivelyEjectedTarget(t *testing.T) {
+	t.Parallel()
+
+	balancer, err := NewRoundRobinBalancer(
+		[]string{
+			"http://127.0.0.1:9090",
+			"http://127.0.0.1:9092",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, item := range balancer.targets {
+		item.healthy.Store(true)
+	}
+
+	failedTarget := balancer.targets[0].target
+	for i := 0; i < defaultPassiveFailureThreshold; i++ {
+		balancer.ReportFailure(failedTarget)
+	}
+
+	got := balancer.Next()
+	if got == nil || got.String() != "http://127.0.0.1:9092" {
+		t.Fatalf("Next() = %v, want remaining healthy target 9092", got)
+	}
+
+	wantStatuses := []UpstreamStatus{
+		{Target: "http://127.0.0.1:9090", Healthy: false},
+		{Target: "http://127.0.0.1:9092", Healthy: true},
+	}
+	if gotStatuses := balancer.ListTargets(); !reflect.DeepEqual(gotStatuses, wantStatuses) {
+		t.Fatalf("ListTargets() = %#v, want %#v", gotStatuses, wantStatuses)
+	}
+}
+
+func TestBalancerRequestSuccessResetsPassiveFailures(t *testing.T) {
+	t.Parallel()
+
+	balancer, err := NewRoundRobinBalancer(
+		[]string{"http://127.0.0.1:9090"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	item := balancer.targets[0]
+	item.healthy.Store(true)
+
+	balancer.ReportFailure(item.target)
+	balancer.ReportFailure(item.target)
+	balancer.ReportSuccess(item.target)
+	balancer.ReportFailure(item.target)
+	balancer.ReportFailure(item.target)
+
+	if got := balancer.Next(); got == nil {
+		t.Fatal("target was ejected even though a successful response reset the failure sequence")
+	}
+}
+
+func TestBalancerHealthyProbeRecoversPassivelyEjectedTarget(t *testing.T) {
+	t.Parallel()
+
+	target := newHealthServer(
+		t,
+		staticHealthHandler(http.StatusOK),
+	)
+	balancer, err := NewRoundRobinBalancer([]string{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	item := balancer.targets[0]
+	item.healthy.Store(true)
+	for i := 0; i < defaultPassiveFailureThreshold; i++ {
+		balancer.ReportFailure(item.target)
+	}
+
+	if got := balancer.Next(); got != nil {
+		t.Fatalf("Next() = %v, want nil while target is passively ejected", got)
+	}
+
+	balancer.checkAll(context.Background(), 200*time.Millisecond)
+	if got := balancer.Next(); got == nil || got.String() != target {
+		t.Fatalf("Next() = %v, want recovered target %s", got, target)
+	}
+}
+
+type recordingUpstreamEventPublisher struct {
+	mu     sync.Mutex
+	events []upstreamEvent
+}
+
+func (p *recordingUpstreamEventPublisher) Publish(event upstreamEvent) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, event)
+	return true
+}
+
+func (p *recordingUpstreamEventPublisher) snapshot() []upstreamEvent {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]upstreamEvent(nil), p.events...)
+}
+
+func TestBalancerPublishesOneEventPerPassiveStateTransition(t *testing.T) {
+	t.Parallel()
+
+	target := newHealthServer(t, staticHealthHandler(http.StatusOK))
+	publisher := &recordingUpstreamEventPublisher{}
+	balancer, err := NewRoundRobinBalancer(
+		[]string{target},
+		WithUpstreamEventPublisher(publisher),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	item := balancer.targets[0]
+	item.healthy.Store(true)
+	for i := 0; i < defaultPassiveFailureThreshold+2; i++ {
+		balancer.ReportFailure(item.target)
+	}
+
+	balancer.checkAll(context.Background(), 200*time.Millisecond)
+
+	want := []upstreamEvent{
+		{
+			Kind:     upstreamEventEjected,
+			Target:   target,
+			Failures: defaultPassiveFailureThreshold,
+			Window:   defaultPassiveFailureWindow,
+		},
+		{
+			Kind:             upstreamEventRecovered,
+			Target:           target,
+			SuccessfulProbes: 1,
+		},
+	}
+	if got := publisher.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("published events = %#v, want %#v", got, want)
+	}
 }

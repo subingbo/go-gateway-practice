@@ -105,8 +105,15 @@ func parsePort(name string, raw string, defaultPort uint64) (uint64, error) {
 	return port, nil
 }
 
-func newUserMux() *http.ServeMux {
+func newUserMux(cfg serviceConfig) *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// 使用注册到 Nacos 的 IP 和端口标识当前实例。
+	// 多副本联调时，可以直接从响应看出本次请求落到了哪个实例。
+	instanceAddress := net.JoinHostPort(
+		cfg.serviceIP,
+		strconv.FormatUint(cfg.port, 10),
+	)
 
 	mux.HandleFunc("GET /users/{id}", func(
 		w http.ResponseWriter,
@@ -115,6 +122,7 @@ func newUserMux() *http.ServeMux {
 		id := r.PathValue("id")
 
 		fmt.Fprintf(w, "Service: User\n")
+		fmt.Fprintf(w, "Instance: %s\n", instanceAddress)
 		fmt.Fprintf(w, "User ID: %s\n", id)
 		fmt.Fprintf(w, "Method: %s\n", r.Method)
 		fmt.Fprintf(w, "Path: %s\n", r.URL.Path)
@@ -176,7 +184,7 @@ func runUserService(
 	}()
 
 	server := &http.Server{
-		Handler:           newUserMux(),
+		Handler:           newUserMux(cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

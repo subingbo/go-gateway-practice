@@ -197,7 +197,10 @@ func TestRunUserServiceRegistersServesAndDeregisters(t *testing.T) {
 		cancel()
 		t.Fatalf("GET /users/42 status = %d, want 200", response.StatusCode)
 	}
-	wantBody := "Service: User\nUser ID: 42\nMethod: GET\nPath: /users/42\n"
+	wantBody := fmt.Sprintf(
+		"Service: User\nInstance: 127.0.0.1:%d\nUser ID: 42\nMethod: GET\nPath: /users/42\n",
+		port,
+	)
 	if string(body) != wantBody {
 		cancel()
 		t.Fatalf("GET /users/42 body = %q, want %q", body, wantBody)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"example.com/go-gateway-practice/internal/discovery"
 	"example.com/go-gateway-practice/internal/redisstore"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -64,12 +66,34 @@ func newReverseProxy(
 	balancer LoadBalancer,
 	prefix string,
 ) (http.Handler, error) {
+	return newReverseProxyWithTransport(
+		balancer,
+		prefix,
+		http.DefaultTransport,
+	)
+}
+
+func newReverseProxyWithTransport(
+	balancer LoadBalancer,
+	prefix string,
+	baseTransport http.RoundTripper,
+) (http.Handler, error) {
 
 	if balancer == nil {
 		return nil, errors.New("load balancer is required")
 	}
 
+	// RoundRobinBalancer 实现这个接口；保留类型断言让简单测试替身仍可只实现 Next。
+	reporter, _ := balancer.(upstreamOutcomeReporter)
+	retrySelector, _ := balancer.(retryTargetSelector)
+
 	proxy := &httputil.ReverseProxy{
+		Transport: newRetryingRoundTripper(
+			baseTransport,
+			retrySelector,
+			reporter,
+		),
+
 		Rewrite: func(pr *httputil.ProxyRequest) {
 
 			// 1. 从 Context 获取本次请求选中的后端
@@ -97,12 +121,41 @@ func newReverseProxy(
 			pr.SetXForwarded()
 		},
 
+		// 收到任何 HTTP 响应都说明传输链路可用，即使业务状态码是 4xx/5xx，
+		// 也应打断“连接级连续失败”序列。
+		ModifyResponse: func(resp *http.Response) error {
+			if reporter == nil || resp == nil || resp.Request == nil {
+				return nil
+			}
+
+			targetURL, ok := selectedUpstreamFromContext(
+				resp.Request.Context(),
+			)
+			if ok {
+				reporter.ReportSuccess(targetURL)
+			}
+
+			return nil
+		},
+
 		// 5. 自定义代理错误处理
 		ErrorHandler: func(
 			w http.ResponseWriter,
 			r *http.Request,
 			err error,
 		) {
+			// 客户端主动取消不代表后端实例异常；其他传输错误和网关超时
+			// 才进入被动失败滑动窗口。
+			if reporter != nil &&
+				!errors.Is(r.Context().Err(), context.Canceled) {
+				targetURL, ok := failedUpstreamFromError(
+					r.Context(),
+					err,
+				)
+				if ok {
+					reporter.ReportFailure(targetURL)
+				}
+			}
 
 			if errors.Is(err, context.DeadlineExceeded) ||
 				errors.Is(r.Context().Err(), context.DeadlineExceeded) {
@@ -140,6 +193,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// 每个客户端 IP 使用独立令牌桶。环境变量可以覆盖默认的每秒速率和突发容量。
+	rateLimitSettings, err := loadRateLimitConfig(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	requestLimiter := newClientRateLimiter(
+		rateLimitSettings.requestsPerSecond,
+		rateLimitSettings.burst,
+		defaultRateLimitClientTTL,
+	)
+	log.Printf(
+		"Gateway rate limit configured: rps=%.2f burst=%d",
+		rateLimitSettings.requestsPerSecond,
+		rateLimitSettings.burst,
+	)
 
 	// 2. 初始化 Redis 地址
 	redisAddr := os.Getenv("REDIS_ADDR")
@@ -245,6 +314,29 @@ func main() {
 
 	defer stopHealthChecks()
 
+	// Gateway 只作为服务消费者，不需要向 Nacos 注册自己。
+	// 它使用 NACOS_ADDR 创建客户端，用来查询 user-service 和 order-service。
+	nacosConfig, err := loadNacosServerConfig(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	nacosClient, err := discovery.NewClient(
+		nacosConfig.host,
+		nacosConfig.port,
+	)
+	if err != nil {
+		log.Fatalf("Initialize Nacos client: %v", err)
+	}
+	defer nacosClient.Close()
+
+	log.Printf("Nacos discovery configured: %s", nacosConfig.address)
+
+	// 被动摘除和恢复日志由独立 Goroutine 写出，业务请求只做非阻塞事件投递。
+	upstreamEventLogger := newAsyncUpstreamEventLogger(
+		log.Default(),
+	)
+
 	// 保存服务路由与负载均衡器的映射关系
 	balancers := make(
 		map[string]*RoundRobinBalancer,
@@ -254,9 +346,32 @@ func main() {
 	// 按路由表创建负载均衡器和反向代理
 	for _, route := range proxyRoutes {
 
-		// 1. 当前先使用静态兜底地址创建负载均衡器
-		// 下一步接入 Nacos 后，发现到的动态实例会更新到 balancer 内部
-		balancer, err := NewRoundRobinBalancer(route.FallbackTargets)
+		// 1. Gateway 启动时先向 Nacos 查询一次。
+		// 查询失败时 resolveRouteTargets 会同时返回兜底地址和 error：
+		// 地址继续用于启动，error 只负责把服务发现异常记录到日志。
+		targets, discoveryWarning := resolveRouteTargets(
+			nacosClient,
+			route,
+		)
+		if discoveryWarning != nil {
+			log.Printf(
+				"Nacos discovery warning, use fallback targets: route=%s targets=%v err=%v",
+				route.Name,
+				targets,
+				discoveryWarning,
+			)
+		} else {
+			log.Printf(
+				"Nacos instances discovered: route=%s targets=%v",
+				route.Name,
+				targets,
+			)
+		}
+
+		balancer, err := NewRoundRobinBalancer(
+			targets,
+			WithUpstreamEventPublisher(upstreamEventLogger),
+		)
 		if err != nil {
 			log.Fatalf(
 				"Create load balancer for %s failed: %v",
@@ -297,6 +412,39 @@ func main() {
 		// 5. 注册路由
 		apiMux.Handle(route.Path, proxy)
 	}
+
+	// 后台定时刷新 Nacos 实例列表，而不是每个业务请求都查询 Nacos。
+	// 请求只读取 balancer 当前保存的内存快照，因此转发链路更快，也不依赖 Nacos 的瞬时状态。
+	const nacosRefreshInterval = 5 * time.Second
+
+	var discoveryWG sync.WaitGroup
+	discoveryWG.Add(1)
+
+	go func() {
+		defer discoveryWG.Done()
+
+		ticker := time.NewTicker(nacosRefreshInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-healthCtx.Done():
+				log.Println("Nacos target refresh stopped")
+				return
+
+			case <-ticker.C:
+				// 单个服务刷新失败时保留最后一次可用地址；
+				// refreshRouteTargets 仍会继续刷新其他服务。
+				for _, refreshErr := range refreshRouteTargets(
+					nacosClient,
+					proxyRoutes,
+					balancers,
+				) {
+					log.Printf("Nacos target refresh warning: %v", refreshErr)
+				}
+			}
+		}
+	}()
 
 	// 9. 获取当前登录用户
 	apiMux.HandleFunc("GET /api/whoami", func(
@@ -441,7 +589,9 @@ func main() {
 
 	// 19. 日志与指标中间件
 	handler := metricsMiddleware(
-		loggingMiddleware(mux),
+		loggingMiddleware(
+			rateLimitMiddleware(mux, requestLimiter),
+		),
 		gatewayMetrics,
 	)
 
@@ -486,7 +636,7 @@ func main() {
 		)
 	}
 
-	// 1. 停止健康检查
+	// 1. 停止 Nacos 定时刷新和健康检查
 	stopHealthChecks()
 
 	// 2. 等待 HTTP Server 优雅关闭
@@ -520,6 +670,8 @@ func main() {
 	for _, balancer := range balancers {
 		balancer.WaitHealthChecks()
 	}
+	discoveryWG.Wait()
+	upstreamEventLogger.Close()
 
 	log.Println("Gateway shutdown sequence completed")
 }

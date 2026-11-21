@@ -24,11 +24,19 @@ type LoadBalancer interface {
 	Next() *url.URL
 }
 
+// upstreamOutcomeReporter 接收真实代理请求的传输结果。
+// 业务响应只用于维护被动失败窗口，不直接修改主动健康检查状态。
+type upstreamOutcomeReporter interface {
+	ReportFailure(target *url.URL)
+	ReportSuccess(target *url.URL)
+}
+
 // upstream 表示一个后端实例
 type upstream struct {
 	target  *url.URL
 	healthy atomic.Bool
 	checked bool
+	passive passiveFailureTracker
 }
 
 // RoundRobinBalancer 实现轮询负载均衡
@@ -39,14 +47,38 @@ type RoundRobinBalancer struct {
 	healthChecksStarted atomic.Bool
 	healthClient        *http.Client
 	healthWG            sync.WaitGroup
+	eventPublisher      upstreamEventPublisher
+}
+
+type RoundRobinBalancerOption func(*RoundRobinBalancer)
+
+func WithUpstreamEventPublisher(
+	publisher upstreamEventPublisher,
+) RoundRobinBalancerOption {
+	return func(b *RoundRobinBalancer) {
+		b.eventPublisher = publisher
+	}
 }
 
 // 编译期检查接口实现
 var _ LoadBalancer = (*RoundRobinBalancer)(nil)
+var _ upstreamOutcomeReporter = (*RoundRobinBalancer)(nil)
+
+func newUpstream(target *url.URL) *upstream {
+	return &upstream{
+		target: target,
+		passive: newPassiveFailureTracker(
+			defaultPassiveFailureThreshold,
+			defaultPassiveFailureWindow,
+			defaultPassiveRecoveryThreshold,
+		),
+	}
+}
 
 // NewRoundRobinBalancer 创建轮询负载均衡器
 func NewRoundRobinBalancer(
 	rawTargets []string,
+	options ...RoundRobinBalancerOption,
 ) (*RoundRobinBalancer, error) {
 
 	if len(rawTargets) == 0 {
@@ -68,12 +100,10 @@ func NewRoundRobinBalancer(
 			return nil, fmt.Errorf("invalid upstream target: %s", raw)
 		}
 
-		targets = append(targets, &upstream{
-			target: target,
-		})
+		targets = append(targets, newUpstream(target))
 	}
 
-	return &RoundRobinBalancer{
+	balancer := &RoundRobinBalancer{
 		targets: targets,
 
 		// 所有健康检查共享一个 HTTP Client
@@ -86,11 +116,34 @@ func NewRoundRobinBalancer(
 				return http.ErrUseLastResponse
 			},
 		},
-	}, nil
+	}
+
+	for _, option := range options {
+		if option != nil {
+			option(balancer)
+		}
+	}
+
+	return balancer, nil
 }
 
 // Next 选择下一个健康的后端实例
 func (b *RoundRobinBalancer) Next() *url.URL {
+	return b.nextExcluding("")
+}
+
+// NextExcluding 选择下一台可用实例，并明确跳过刚刚请求失败的地址。
+// 它用于幂等请求重试，保证第二次尝试不会再次命中原实例。
+func (b *RoundRobinBalancer) NextExcluding(excluded *url.URL) *url.URL {
+	excludedAddress := ""
+	if excluded != nil {
+		excludedAddress = excluded.String()
+	}
+
+	return b.nextExcluding(excludedAddress)
+}
+
+func (b *RoundRobinBalancer) nextExcluding(excludedAddress string) *url.URL {
 
 	if b == nil {
 		return nil
@@ -111,7 +164,13 @@ func (b *RoundRobinBalancer) Next() *url.URL {
 
 		candidate := targets[index]
 
+		if candidate.target.String() == excludedAddress {
+			continue
+		}
 		if !candidate.healthy.Load() {
+			continue
+		}
+		if candidate.passive.isEjected() {
 			continue
 		}
 
@@ -209,6 +268,13 @@ func (b *RoundRobinBalancer) checkAll(
 		}
 
 		previous := item.healthy.Swap(healthy)
+		if item.passive.recordHealthProbe(healthy) {
+			b.publishEvent(upstreamEvent{
+				Kind:             upstreamEventRecovered,
+				Target:           item.target.String(),
+				SuccessfulProbes: defaultPassiveRecoveryThreshold,
+			})
+		}
 
 		if !item.checked || previous != healthy {
 			log.Printf(
@@ -324,9 +390,7 @@ func (b *RoundRobinBalancer) AddTarget(raw string) error {
 		}
 	}
 
-	b.targets = append(b.targets, &upstream{
-		target: target,
-	})
+	b.targets = append(b.targets, newUpstream(target))
 
 	return nil
 }
@@ -362,6 +426,61 @@ func (b *RoundRobinBalancer) RemoveTarget(raw string) error {
 	return fmt.Errorf("upstream not found: %s", raw)
 }
 
+// ReplaceTargets 用服务发现返回的完整实例列表替换当前列表。
+// 地址未变化的实例会复用原来的 upstream，从而保留已经探测到的健康状态；
+// 新出现的实例默认不健康，要等 HTTP 健康检查通过后才会参与转发。
+func (b *RoundRobinBalancer) ReplaceTargets(rawTargets []string) error {
+
+	if b == nil {
+		return errors.New("balancer is nil")
+	}
+
+	if len(rawTargets) == 0 {
+		return errors.New("at least one upstream target is required")
+	}
+
+	// 先完整解析新列表，再获取写锁。只要其中一个地址非法，旧列表就完全不变。
+	parsedTargets := make([]*url.URL, 0, len(rawTargets))
+
+	for _, raw := range rawTargets {
+		raw = strings.TrimSpace(raw)
+
+		target, err := url.Parse(raw)
+		if err != nil {
+			return fmt.Errorf("parse target %q: %w", raw, err)
+		}
+
+		if (target.Scheme != "http" && target.Scheme != "https") ||
+			target.Host == "" {
+			return fmt.Errorf("invalid upstream target: %s", raw)
+		}
+
+		parsedTargets = append(parsedTargets, target)
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	existingByAddress := make(map[string]*upstream, len(b.targets))
+	for _, item := range b.targets {
+		existingByAddress[item.target.String()] = item
+	}
+
+	nextTargets := make([]*upstream, 0, len(parsedTargets))
+	for _, target := range parsedTargets {
+		if existing := existingByAddress[target.String()]; existing != nil {
+			nextTargets = append(nextTargets, existing)
+			continue
+		}
+
+		nextTargets = append(nextTargets, newUpstream(target))
+	}
+
+	b.targets = nextTargets
+
+	return nil
+}
+
 // ListTargets 返回当前所有后端实例的健康状态
 func (b *RoundRobinBalancer) ListTargets() []UpstreamStatus {
 
@@ -377,11 +496,62 @@ func (b *RoundRobinBalancer) ListTargets() []UpstreamStatus {
 	for _, item := range b.targets {
 		result = append(result, UpstreamStatus{
 			Target:  item.target.String(),
-			Healthy: item.healthy.Load(),
+			Healthy: item.healthy.Load() && !item.passive.isEjected(),
 		})
 	}
 
 	return result
+}
+
+// ReportFailure 把真实代理请求的传输失败计入目标实例的滑动窗口。
+// 达到阈值只改变被动摘除状态，不覆盖主动 /health 检查结果。
+func (b *RoundRobinBalancer) ReportFailure(target *url.URL) {
+	item := b.findTarget(target)
+	if item == nil {
+		return
+	}
+
+	if item.passive.recordFailure(time.Now()) {
+		b.publishEvent(upstreamEvent{
+			Kind:     upstreamEventEjected,
+			Target:   item.target.String(),
+			Failures: defaultPassiveFailureThreshold,
+			Window:   defaultPassiveFailureWindow,
+		})
+	}
+}
+
+// ReportSuccess 清空尚未摘除实例的连续传输失败记录。
+func (b *RoundRobinBalancer) ReportSuccess(target *url.URL) {
+	item := b.findTarget(target)
+	if item == nil {
+		return
+	}
+
+	item.passive.recordRequestSuccess()
+}
+
+func (b *RoundRobinBalancer) findTarget(target *url.URL) *upstream {
+	if b == nil || target == nil {
+		return nil
+	}
+
+	address := target.String()
+	for _, item := range b.snapshotTargets() {
+		if item.target.String() == address {
+			return item
+		}
+	}
+
+	return nil
+}
+
+func (b *RoundRobinBalancer) publishEvent(event upstreamEvent) {
+	if b == nil || b.eventPublisher == nil {
+		return
+	}
+
+	b.eventPublisher.Publish(event)
 }
 
 // snapshotTargets 获取后端实例切片的快照
