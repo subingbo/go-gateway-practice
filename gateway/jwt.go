@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -13,6 +12,8 @@ import (
 // GatewayClaims 定义 JWT 中的用户信息
 type GatewayClaims struct {
 	UserID string `json:"user_id"`
+	Role   string `json:"role"`
+
 	jwt.RegisteredClaims
 }
 
@@ -21,6 +22,7 @@ func generateJWT(
 	userID string,
 	secret []byte,
 	ttl time.Duration,
+	roles ...string,
 ) (string, error) {
 
 	// 1. 参数检查
@@ -48,9 +50,26 @@ func generateJWT(
 
 	jti := hex.EncodeToString(jtiBytes)
 
+	role := string(RoleUser)
+
+	if len(roles) > 1 {
+		return "", errors.New("multiple roles are not allowed")
+	}
+
+	if len(roles) == 1 && roles[0] != "" {
+		role = roles[0]
+	}
+
+	if role != string(RoleAdmin) &&
+		role != string(RoleUser) {
+		return "", errors.New("invalid user role")
+	}
+
 	// 4. 创建 Claims
 	claims := &GatewayClaims{
 		UserID: userID,
+		Role:   role,
+
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer: "go-gateway-practice",
 
@@ -110,6 +129,15 @@ func verifyJWT(
 	if !token.Valid ||
 		claims.UserID == "" ||
 		claims.Subject != claims.UserID {
+		return nil, errors.New("invalid JWT identity")
+	}
+
+	if !token.Valid ||
+		claims.UserID == "" ||
+		claims.Subject != claims.UserID ||
+		(claims.Role != string(RoleAdmin) &&
+			claims.Role != string(RoleUser)) {
+
 		return nil, errors.New("invalid JWT identity")
 	}
 

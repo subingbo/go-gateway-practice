@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -167,11 +169,18 @@ func main() {
 	}
 
 	defer func() {
-		if err := redisClient.Close(); err != nil {
-			log.Printf("Close Redis client failed: %v", err)
-		}
-	}()
+		log.Println("[Shutdown] Redis Close started")
 
+		start := time.Now()
+
+		err := redisClient.Close()
+
+		log.Printf(
+			"[Shutdown] Redis Close finished, duration=%s, err=%v",
+			time.Since(start),
+			err,
+		)
+	}()
 	log.Printf("Redis connected: %s", redisAddr)
 
 	// 4. 初始化 Refresh Token 管理器
@@ -199,20 +208,55 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// 可选配置一个普通用户，用于测试 RBAC
+	regularUsername := strings.TrimSpace(
+		os.Getenv("GATEWAY_USER_USERNAME"),
+	)
+
+	regularPassword := os.Getenv("GATEWAY_USER_PASSWORD")
+
+	if regularUsername != "" || regularPassword != "" {
+
+		if regularUsername == "" || regularPassword == "" {
+			log.Fatal("both GATEWAY_USER_USERNAME and GATEWAY_USER_PASSWORD are required")
+		}
+
+		if err := users.AddRegularUser(
+			regularUsername,
+			regularPassword,
+		); err != nil {
+			log.Fatalf("Create regular user failed: %v", err)
+		}
+	}
+
 	// 7. 创建 API 子路由
 	apiMux := http.NewServeMux()
 
-	// 创建健康检查 Context
-	healthCtx, stopHealthChecks := context.WithCancel(
+	// 创建根 Context，监听操作系统退出信号
+	rootCtx, stopRoot := signal.NotifyContext(
 		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
 	)
+	defer stopRoot()
+
+	// 健康检查 Context 继承根 Context
+	healthCtx, stopHealthChecks := context.WithCancel(rootCtx)
+
 	defer stopHealthChecks()
+
+	// 保存服务路由与负载均衡器的映射关系
+	balancers := make(
+		map[string]*RoundRobinBalancer,
+		len(proxyRoutes),
+	)
 
 	// 按路由表创建负载均衡器和反向代理
 	for _, route := range proxyRoutes {
 
-		// 1. 创建负载均衡器
-		balancer, err := NewRoundRobinBalancer(route.Targets)
+		// 1. 当前先使用静态兜底地址创建负载均衡器
+		// 下一步接入 Nacos 后，发现到的动态实例会更新到 balancer 内部
+		balancer, err := NewRoundRobinBalancer(route.FallbackTargets)
 		if err != nil {
 			log.Fatalf(
 				"Create load balancer for %s failed: %v",
@@ -221,8 +265,10 @@ func main() {
 			)
 		}
 
-		// 2. 启动健康检查
-		// 每 5 秒检查一次，通过 HTTP GET /health 检查后端，单次检查最多等待 1 秒
+		// 2. 保存负载均衡器
+		balancers[route.Path] = balancer
+
+		// 3. 启动健康检查
 		if err := balancer.StartHealthChecks(
 			healthCtx,
 			5*time.Second,
@@ -235,7 +281,7 @@ func main() {
 			)
 		}
 
-		// 3. 创建反向代理
+		// 4. 创建反向代理
 		proxy, err := newReverseProxy(
 			balancer,
 			route.Prefix,
@@ -248,9 +294,10 @@ func main() {
 			)
 		}
 
-		// 4. 注册路由
+		// 5. 注册路由
 		apiMux.Handle(route.Path, proxy)
 	}
+
 	// 9. 获取当前登录用户
 	apiMux.HandleFunc("GET /api/whoami", func(
 		w http.ResponseWriter,
@@ -278,6 +325,46 @@ func main() {
 
 	apiMux.HandleFunc("GET /api/routes", routesHandler())
 	apiMux.HandleFunc("GET /api/stats", statsHandler(gatewayMetrics))
+
+	// // 查询后端实例
+	// apiMux.HandleFunc(
+	// 	"GET /api/upstreams",
+	// 	listUpstreamsHandler(balancers),
+	// )
+
+	// // 添加后端实例
+	// apiMux.HandleFunc(
+	// 	"POST /api/upstreams",
+	// 	addUpstreamHandler(balancers),
+	// )
+
+	// // 删除后端实例
+	// apiMux.HandleFunc(
+	// 	"DELETE /api/upstreams",
+	// 	removeUpstreamHandler(balancers),
+	// )
+
+	// 查询：普通用户和管理员都可以
+	apiMux.HandleFunc(
+		"GET /api/upstreams",
+		listUpstreamsHandler(balancers),
+	)
+
+	// 添加：仅管理员
+	apiMux.Handle(
+		"POST /api/upstreams",
+		adminOnlyMiddleware(
+			addUpstreamHandler(balancers),
+		),
+	)
+
+	// 删除：仅管理员
+	apiMux.Handle(
+		"DELETE /api/upstreams",
+		adminOnlyMiddleware(
+			removeUpstreamHandler(balancers),
+		),
+	)
 
 	// 11. 创建 Gateway 主路由
 	mux := http.NewServeMux()
@@ -310,6 +397,7 @@ func main() {
 			jwtSecret,
 			refreshManager,
 			refreshCookieSecure,
+			users,
 		),
 	)
 
@@ -367,8 +455,71 @@ func main() {
 	// 21. 启动 Gateway
 	log.Println("Gateway listening on :8080")
 
-	if err := server.ListenAndServe(); err != nil &&
-		err != http.ErrServerClosed {
-		log.Fatal(err)
+	// 用 Channel 接收 HTTP Server 的退出结果
+	serverErr := make(chan error, 1)
+
+	// 独立 Goroutine 启动 HTTP Server
+	go func() {
+		log.Printf("Gateway listening on %s", server.Addr)
+		serverErr <- server.ListenAndServe()
+	}()
+
+	// 标记 HTTP Server 是否已经退出
+	serverExited := false
+
+	// 等待操作系统退出信号，或者 HTTP Server 异常退出
+	select {
+
+	case err := <-serverErr:
+
+		serverExited = true
+
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("Gateway server failed: %v", err)
+		}
+
+	case <-rootCtx.Done():
+
+		log.Printf(
+			"Shutdown signal received: %v",
+			rootCtx.Err(),
+		)
 	}
+
+	// 1. 停止健康检查
+	stopHealthChecks()
+
+	// 2. 等待 HTTP Server 优雅关闭
+	shutdownCtx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+
+		log.Printf("Graceful shutdown failed: %v", err)
+
+		// 超时后强制关闭连接
+		if closeErr := server.Close(); closeErr != nil {
+			log.Printf("Force close failed: %v", closeErr)
+		}
+	}
+
+	cancel()
+
+	// 3. 确认 HTTP Server 的启动 Goroutine 已退出
+	if !serverExited {
+		err := <-serverErr
+
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("Gateway server exit error: %v", err)
+		}
+	}
+
+	// 4. 等待所有健康检查 Goroutine 退出
+	for _, balancer := range balancers {
+		balancer.WaitHealthChecks()
+	}
+
+	log.Println("Gateway shutdown sequence completed")
 }

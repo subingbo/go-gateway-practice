@@ -8,31 +8,45 @@ import (
 )
 
 // API 路由统一使用的超时时间
-const apiTimeout = 2 * time.Second
+const apiTimeout = 10 * time.Second
 
 // proxyRoute 描述一条需要反向代理的 API 路由
 type proxyRoute struct {
-	Name    string
-	Path    string
-	Targets []string
-	Prefix  string
+	// Name 是展示给管理页面和日志看的中文名称
+	Name string
+
+	// ServiceName 是注册在 Nacos 中的逻辑服务名
+	// Gateway 后续使用它查询健康实例，而不是依赖固定 IP
+	ServiceName string
+
+	// Path 是 Gateway 对外匹配的路由前缀
+	Path string
+
+	// FallbackTargets 是 Nacos 暂时不可用时使用的静态兜底地址
+	// 它不是用来保存 Nacos 返回结果的；动态实例由负载均衡器自己维护
+	FallbackTargets []string
+
+	// Prefix 是转发给后端前需要从请求路径中删除的前缀
+	Prefix string
 }
 
 // proxyRoutes 是网关当前代理的上游路由表
 var proxyRoutes = []proxyRoute{
 	{
-		Name: "用户服务",
-		Path: "/api/users/",
-		Targets: []string{
+		Name:        "用户服务",
+		ServiceName: "user-service",
+		Path:        "/api/users/",
+		FallbackTargets: []string{
 			"http://127.0.0.1:9090",
 			"http://127.0.0.1:9092",
 		},
 		Prefix: "/api",
 	},
 	{
-		Name: "订单服务",
-		Path: "/api/orders/",
-		Targets: []string{
+		Name:        "订单服务",
+		ServiceName: "order-service",
+		Path:        "/api/orders/",
+		FallbackTargets: []string{
 			"http://127.0.0.1:9091",
 		},
 		Prefix: "/api",
@@ -59,7 +73,7 @@ func routeInfos() []routeInfo {
 			Name:        route.Name,
 			Method:      "*",
 			Path:        route.Path,
-			Upstream:    strings.Join(route.Targets, ", "),
+			Upstream:    strings.Join(route.FallbackTargets, ", "),
 			Auth:        true,
 			TimeoutMS:   apiTimeout.Milliseconds(),
 			Description: "反向代理，转发前剥离 /api 前缀",

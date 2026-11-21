@@ -3,12 +3,13 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"golang.org/x/crypto/bcrypt"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 const accessTokenTTL = 15 * time.Minute
@@ -22,16 +23,38 @@ type LoginResponse struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int64  `json:"expires_in"`
+	Role        string `json:"role"`
+}
+
+type UserRole string
+
+const (
+	RoleAdmin UserRole = "admin"
+	RoleUser  UserRole = "user"
+)
+
+// 用户身份
+type UserIdentity struct {
+	ID   string
+	Role UserRole
+}
+
+// 内部用户记录
+type storedUser struct {
+	username     string
+	userID       string
+	passwordHash []byte
+	role         UserRole
 }
 
 // 用户仓库
 type MemoryUserStore struct {
-	username     string
-	userID       string
-	passwordHash []byte
+	mu          sync.RWMutex
+	usersByName map[string]storedUser
+	usersByID   map[string]storedUser
 }
 
-// 创建测试用户
+// 创建用户仓库，默认创建一个管理员
 func NewMemoryUserStore(
 	username string,
 	password string,
@@ -51,32 +74,143 @@ func NewMemoryUserStore(
 		return nil, err
 	}
 
-	return &MemoryUserStore{
+	store := &MemoryUserStore{
+		usersByName: make(map[string]storedUser),
+		usersByID:   make(map[string]storedUser),
+	}
+
+	admin := storedUser{
 		username:     username,
 		userID:       "dev-user-001",
 		passwordHash: passwordHash,
+		role:         RoleAdmin,
+	}
+
+	store.usersByName[username] = admin
+	store.usersByID[admin.userID] = admin
+
+	return store, nil
+}
+
+// 添加普通用户
+func (s *MemoryUserStore) AddRegularUser(
+	username string,
+	password string,
+) error {
+
+	if s == nil {
+		return errors.New("user store is nil")
+	}
+
+	username = strings.TrimSpace(username)
+
+	if username == "" || password == "" {
+		return errors.New("username and password are required")
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte(password),
+		bcrypt.DefaultCost,
+	)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.usersByName[username]; exists {
+		return errors.New("username already exists")
+	}
+
+	// 生成不重复的用户 ID
+	var userID string
+
+	for i := len(s.usersByID) + 1; ; i++ {
+		candidate := fmt.Sprintf("dev-user-%03d", i)
+
+		if _, exists := s.usersByID[candidate]; !exists {
+			userID = candidate
+			break
+		}
+	}
+
+	user := storedUser{
+		username:     username,
+		userID:       userID,
+		passwordHash: passwordHash,
+		role:         RoleUser,
+	}
+
+	s.usersByName[username] = user
+	s.usersByID[userID] = user
+
+	return nil
+}
+
+// 验证用户并返回身份信息
+func (s *MemoryUserStore) AuthenticateUser(
+	username string,
+	password string,
+) (UserIdentity, error) {
+
+	if s == nil {
+		return UserIdentity{}, errors.New("invalid credentials")
+	}
+
+	s.mu.RLock()
+	user, ok := s.usersByName[strings.TrimSpace(username)]
+	s.mu.RUnlock()
+
+	if !ok {
+		return UserIdentity{}, errors.New("invalid credentials")
+	}
+
+	if err := bcrypt.CompareHashAndPassword(
+		user.passwordHash,
+		[]byte(password),
+	); err != nil {
+		return UserIdentity{}, errors.New("invalid credentials")
+	}
+
+	return UserIdentity{
+		ID:   user.userID,
+		Role: user.role,
 	}, nil
 }
 
-// 验证用户
+// 保留原来的 Authenticate 方法，兼容已有代码
 func (s *MemoryUserStore) Authenticate(
 	username string,
 	password string,
 ) (string, error) {
 
-	if strings.TrimSpace(username) != s.username {
-		return "", errors.New("invalid credentials")
-	}
-
-	err := bcrypt.CompareHashAndPassword(
-		s.passwordHash,
-		[]byte(password),
-	)
+	identity, err := s.AuthenticateUser(username, password)
 	if err != nil {
-		return "", errors.New("invalid credentials")
+		return "", err
 	}
 
-	return s.userID, nil
+	return identity.ID, nil
+}
+
+// 根据用户 ID 查询角色
+func (s *MemoryUserStore) RoleForUserID(
+	userID string,
+) (UserRole, bool) {
+
+	if s == nil {
+		return "", false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	user, ok := s.usersByID[userID]
+	if !ok {
+		return "", false
+	}
+
+	return user.role, true
 }
 
 // 登录接口
@@ -107,7 +241,7 @@ func loginHandler(
 			return
 		}
 
-		userID, err := users.Authenticate(
+		identity, err := users.AuthenticateUser(
 			req.Username,
 			req.Password,
 		)
@@ -118,9 +252,10 @@ func loginHandler(
 
 		// 1. 生成 Access Token
 		accessToken, err := generateJWT(
-			userID,
+			identity.ID,
 			secret,
 			accessTokenTTL,
+			string(identity.Role),
 		)
 		if err != nil {
 			log.Printf("Generate JWT failed: %v", err)
@@ -131,7 +266,7 @@ func loginHandler(
 		// 2. 生成并保存 Refresh Token
 		refreshGrant, err := refreshManager.Issue(
 			r.Context(),
-			userID,
+			identity.ID,
 		)
 		if err != nil {
 			log.Printf("Issue refresh token failed: %v", err)
@@ -155,6 +290,7 @@ func loginHandler(
 			AccessToken: accessToken,
 			TokenType:   "Bearer",
 			ExpiresIn:   int64(accessTokenTTL.Seconds()),
+			Role:        string(identity.Role),
 		}
 
 		if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -204,6 +340,7 @@ func refreshHandler(
 	secret []byte,
 	manager *RefreshTokenManager,
 	cookieSecure bool,
+	userStores ...*MemoryUserStore,
 ) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -243,11 +380,43 @@ func refreshHandler(
 			return
 		}
 
+		// 根据用户 ID 重新获取角色
+		role := RoleUser
+
+		if len(userStores) > 0 && userStores[0] != nil {
+
+			storedRole, ok := userStores[0].RoleForUserID(
+				rotated.UserID,
+			)
+
+			if !ok {
+				// 用户不存在，撤销刚刚轮换出来的 Refresh Token
+				if _, revokeErr := manager.Revoke(
+					r.Context(),
+					rotated.Token,
+				); revokeErr != nil {
+					log.Printf("Revoke unknown user's token failed: %v", revokeErr)
+				}
+
+				clearRefreshTokenCookie(w, cookieSecure)
+
+				http.Error(
+					w,
+					"Invalid user",
+					http.StatusUnauthorized,
+				)
+				return
+			}
+
+			role = storedRole
+		}
+
 		// 3. 根据 Redis 返回的 UserID 签发新的 Access Token
 		accessToken, err := generateJWT(
 			rotated.UserID,
 			secret,
 			accessTokenTTL,
+			string(role),
 		)
 		if err != nil {
 
@@ -281,6 +450,7 @@ func refreshHandler(
 			AccessToken: accessToken,
 			TokenType:   "Bearer",
 			ExpiresIn:   int64(accessTokenTTL.Seconds()),
+			Role:        string(role),
 		}
 
 		if err := json.NewEncoder(w).Encode(response); err != nil {

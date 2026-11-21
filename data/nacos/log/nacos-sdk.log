@@ -1,0 +1,26 @@
+2026-11-21T17:25:39.179+0800	INFO	naming_http/push_receiver.go:89	udp server start, port: 55395
+2026-11-21T17:25:39.202+0800	INFO	rpc/rpc_client.go:157	init rpc client for name %!(EXTRA string=d6b0a67b-1ab1-44ff-bcfa-db0f4f66ae35)
+2026-11-21T17:25:39.202+0800	INFO	rpc/rpc_client.go:166	get app conn labels from client config map[] 
+2026-11-21T17:25:39.202+0800	INFO	rpc/rpc_client.go:168	get app conn labels from env map[] 
+2026-11-21T17:25:39.202+0800	INFO	rpc/rpc_client.go:171	final app conn labels : map[] 
+2026-11-21T17:25:39.202+0800	INFO	rpc/rpc_client.go:327	[RpcClient.Start] d6b0a67b-1ab1-44ff-bcfa-db0f4f66ae35 try to connect to server on start up, server: {serverIp:127.0.0.1 serverPort:8848 serverGrpcPort:9848}
+2026-11-21T17:25:39.202+0800	INFO	rpc/grpc_client.go:175	check tls config %!(EXTRA *constant.TLSConfig=&{false false false    })
+2026-11-21T17:25:39.202+0800	INFO	rpc/grpc_client.go:180	try to get tls config from env
+2026-11-21T17:25:39.202+0800	INFO	rpc/grpc_client.go:189	 tls config from env is not enable
+2026-11-21T17:25:39.214+0800	INFO	util/common.go:96	Local IP:192.168.131.123
+2026-11-21T17:25:39.321+0800	INFO	rpc/rpc_client.go:337	d6b0a67b-1ab1-44ff-bcfa-db0f4f66ae35 success to connect to server {serverIp:127.0.0.1 serverPort:8848 serverGrpcPort:9848} on start up, connectionId=1795253139209_172.17.0.1_34290
+2026-11-21T17:25:39.321+0800	INFO	naming_grpc/naming_grpc_proxy.go:95	register instance namespaceId:<public>,serviceName:<order-service> with instance:<{"instanceId":"","ip":"127.0.0.1","port":9091,"weight":1,"healthy":true,"enabled":true,"ephemeral":true,"clusterName":"DEFAULT","serviceName":"","metadata":{},"instanceHeartBeatInterval":0,"ipDeleteTimeout":0,"instanceHeartBeatTimeOut":0}>
+2026-11-21T17:36:42.825+0800	INFO	naming_http/push_receiver.go:89	udp server start, port: 55297
+2026-11-21T17:36:42.851+0800	INFO	rpc/rpc_client.go:157	init rpc client for name %!(EXTRA string=99064ba1-bccb-4594-90e1-42a87265adc7)
+2026-11-21T17:36:42.851+0800	INFO	rpc/rpc_client.go:166	get app conn labels from client config map[] 
+2026-11-21T17:36:42.851+0800	INFO	rpc/rpc_client.go:168	get app conn labels from env map[] 
+2026-11-21T17:36:42.851+0800	INFO	rpc/rpc_client.go:171	final app conn labels : map[] 
+2026-11-21T17:36:42.851+0800	INFO	rpc/rpc_client.go:327	[RpcClient.Start] 99064ba1-bccb-4594-90e1-42a87265adc7 try to connect to server on start up, server: {serverIp:127.0.0.1 serverPort:8848 serverGrpcPort:9848}
+2026-11-21T17:36:42.851+0800	INFO	rpc/grpc_client.go:175	check tls config %!(EXTRA *constant.TLSConfig=&{false false false    })
+2026-11-21T17:36:42.851+0800	INFO	rpc/grpc_client.go:180	try to get tls config from env
+2026-11-21T17:36:42.851+0800	INFO	rpc/grpc_client.go:189	 tls config from env is not enable
+2026-11-21T17:36:42.862+0800	INFO	util/common.go:96	Local IP:192.168.131.123
+2026-11-21T17:36:42.972+0800	INFO	rpc/rpc_client.go:337	99064ba1-bccb-4594-90e1-42a87265adc7 success to connect to server {serverIp:127.0.0.1 serverPort:8848 serverGrpcPort:9848} on start up, connectionId=1795253802860_172.17.0.1_45440
+2026-11-21T17:36:42.972+0800	INFO	rpc/rpc_client.go:487	99064ba1-bccb-4594-90e1-42a87265adc7 notify connected event to listeners , connectionId=1795253802860_172.17.0.1_45440
+2026-11-21T17:36:42.972+0800	INFO	naming_grpc/naming_grpc_proxy.go:95	register instance namespaceId:<public>,serviceName:<user-service> with instance:<{"instanceId":"","ip":"127.0.0.1","port":9090,"weight":1,"healthy":true,"enabled":true,"ephemeral":true,"clusterName":"DEFAULT","serviceName":"","metadata":{},"instanceHeartBeatInterval":0,"ipDeleteTimeout":0,"instanceHeartBeatTimeOut":0}>
+2026-11-21T17:36:42.972+0800	INFO	naming_grpc/naming_grpc_proxy.go:95	register instance namespaceId:<public>,serviceName:<user-service> with instance:<{"instanceId":"","ip":"127.0.0.1","port":9090,"weight":1,"healthy":true,"enabled":true,"ephemeral":true,"clusterName":"DEFAULT","serviceName":"","metadata":{},"instanceHeartBeatInterval":0,"ipDeleteTimeout":0,"instanceHeartBeatTimeOut":0}>

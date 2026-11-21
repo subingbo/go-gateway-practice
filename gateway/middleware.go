@@ -10,6 +10,8 @@ import (
 
 type userIDContextKey struct{}
 
+type userRoleContextKey struct{}
+
 // 日志中间件
 func loggingMiddleware(next http.Handler) http.Handler {
 
@@ -79,11 +81,16 @@ func authMiddleware(
 		// 5. 获取用户 ID
 		log.Printf("Authenticated user: %s", claims.UserID)
 
-		// 6. 将用户 ID 保存到 Context
 		ctx := context.WithValue(
 			r.Context(),
 			userIDContextKey{},
 			claims.UserID,
+		)
+
+		ctx = context.WithValue(
+			ctx,
+			userRoleContextKey{},
+			claims.Role,
 		)
 
 		// 7. 将新 Context 绑定到 Request
@@ -119,5 +126,35 @@ func timeoutMiddleware(
 
 		// 继续执行下一个 Handler
 		next.ServeHTTP(w, newRequest)
+	})
+}
+
+// 管理员授权中间件
+func adminOnlyMiddleware(
+	next http.Handler,
+) http.Handler {
+
+	return http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+
+		// 从 Context 获取用户角色
+		role, ok := r.Context().Value(
+			userRoleContextKey{},
+		).(string)
+
+		// 没有角色信息或者不是管理员，拒绝访问
+		if !ok || role != string(RoleAdmin) {
+			http.Error(
+				w,
+				"Forbidden: admin role required",
+				http.StatusForbidden,
+			)
+			return
+		}
+
+		// 管理员通过授权检查
+		next.ServeHTTP(w, r)
 	})
 }

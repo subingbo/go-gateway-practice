@@ -35,14 +35,25 @@ data/             运行时生成的 JWT 密钥
 
 ## 快速开始
 
-### 1. 设置环境变量
+### 1. 一次性设置本地开发环境变量
 
-网关启动时必须提供管理员账号，否则会直接退出：
+在 PowerShell 中执行一次以下命令，把配置保存到 Windows 当前用户环境变量：
 
 ```powershell
-$env:GATEWAY_ADMIN_USERNAME = "admin"
-$env:GATEWAY_ADMIN_PASSWORD = "admin123"
+[Environment]::SetEnvironmentVariable("NACOS_ADDR", "127.0.0.1:8848", "User")
+[Environment]::SetEnvironmentVariable("ORDER_SERVICE_PORT", "9091", "User")
+[Environment]::SetEnvironmentVariable("ORDER_SERVICE_IP", "127.0.0.1", "User")
+[Environment]::SetEnvironmentVariable("USER_SERVICE_PORT", "9090", "User")
+[Environment]::SetEnvironmentVariable("USER_SERVICE_IP", "127.0.0.1", "User")
+[Environment]::SetEnvironmentVariable("GATEWAY_ADMIN_USERNAME", "admin", "User")
+[Environment]::SetEnvironmentVariable("GATEWAY_ADMIN_PASSWORD", "admin123", "User")
+[Environment]::SetEnvironmentVariable("GATEWAY_USER_USERNAME", "user", "User")
+[Environment]::SetEnvironmentVariable("GATEWAY_USER_PASSWORD", "user123", "User")
 ```
+
+设置后关闭并重新打开终端。以上密码仅用于本机学习环境，不要用于生产环境或提交真实凭据。
+
+管理员账号为 `admin`，可以查询、添加和删除上游；普通用户账号为 `user`，只能查询上游。
 
 `JWT_SECRET` 可选，值是至少 32 字节随机数据的 Base64。不设置时会自动读取或生成 `data/jwt.secret`。
 

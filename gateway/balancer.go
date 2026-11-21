@@ -37,9 +37,8 @@ type RoundRobinBalancer struct {
 	targets             []*upstream
 	counter             atomic.Uint64
 	healthChecksStarted atomic.Bool
-
-	// 专门用于后端健康检查的 HTTP 客户端
-	healthClient *http.Client
+	healthClient        *http.Client
+	healthWG            sync.WaitGroup
 }
 
 // 编译期检查接口实现
@@ -155,14 +154,16 @@ func (b *RoundRobinBalancer) StartHealthChecks(
 	b.checkAll(ctx, timeout)
 
 	// 后台定期检查
+	b.healthWG.Add(1)
+
 	go func() {
+		defer b.healthWG.Done()
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
 			select {
-
 			case <-ctx.Done():
 				log.Println("Upstream health checks stopped")
 				return
@@ -397,4 +398,13 @@ func (b *RoundRobinBalancer) snapshotTargets() []*upstream {
 		[]*upstream(nil),
 		b.targets...,
 	)
+}
+
+// WaitHealthChecks 等待健康检查 Goroutine 全部退出
+func (b *RoundRobinBalancer) WaitHealthChecks() {
+	if b == nil {
+		return
+	}
+
+	b.healthWG.Wait()
 }
